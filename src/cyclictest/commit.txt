@@ -1,0 +1,6 @@
+[cyclictest] fixes for ftrace options
+
+Miscellaneous fixes for ftrace option handling. Add an enumeration to
+indicate when the -T/--tracer option is specified. Change from using
+the tracing_enabled file to tracing_on to turn tracing on/off. Add the
+latency-format option for nicer latency output.  
