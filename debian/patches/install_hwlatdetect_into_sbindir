@@ -6,18 +6,20 @@ needs root privileges install it into $sbindir.
 
 Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 ---
- Makefile |   10 +++-------
- 1 file changed, 3 insertions(+), 7 deletions(-)
+ Makefile |    8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
 
 --- a/Makefile
 +++ b/Makefile
-@@ -11,13 +11,12 @@
+@@ -11,6 +11,7 @@
  DESTDIR	?=
  prefix  ?= /usr/local
  bindir  ?= $(prefix)/bin
 +sbindir ?= $(prefix)/sbin
  mandir	?= $(prefix)/share/man
  srcdir	?= $(prefix)/src
+ 
+@@ -22,8 +23,6 @@
  
  CFLAGS = -D_GNU_SOURCE -Wall -Wno-nonnull -Isrc/include
  
@@ -26,18 +28,15 @@ Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
  ifndef DEBUG
  	CFLAGS	+= -O2
  else
-@@ -112,12 +111,9 @@
- install: all
+@@ -119,10 +118,7 @@
  	mkdir -p "$(DESTDIR)$(bindir)" "$(DESTDIR)$(mandir)/man4"
  	mkdir -p "$(DESTDIR)$(srcdir)" "$(DESTDIR)$(mandir)/man8"
-+	mkdir -p "$(DESTDIR)$(sbindir)"
  	cp $(TARGETS) "$(DESTDIR)$(bindir)"
 -	if test -n "$(PYLIB)" ; then \
--		mkdir -p "$(DESTDIR)$(PYLIB)" ; \
--		install -m 755 src/hwlatdetect/hwlatdetect.py $(DESTDIR)$(PYLIB)/hwlatdetect.py ; \
+-		install -D -m 755 src/hwlatdetect/hwlatdetect.py $(DESTDIR)$(PYLIB)/hwlatdetect.py ; \
 -		ln -s $(PYLIB)/hwlatdetect.py "$(DESTDIR)$(bindir)/hwlatdetect" ; \
 -	fi
-+	install -m 755 src/hwlatdetect/hwlatdetect.py "$(DESTDIR)$(sbindir)/hwlatdetect"
- 	mkdir -p "$(DESTDIR)$(srcdir)/backfire"
- 	install -m 644 src/backfire/backfire.c "$(DESTDIR)$(srcdir)/backfire/backfire.c"
++	install -D -m 755 src/hwlatdetect/hwlatdetect.py "$(DESTDIR)$(sbindir)/hwlatdetect"
+ 	install -D -m 644 src/backfire/backfire.c "$(DESTDIR)$(srcdir)/backfire/backfire.c"
+ 	install -m 644 src/backfire/Makefile "$(DESTDIR)$(srcdir)/backfire/Makefile"
  	gzip src/backfire/backfire.4 -c >"$(DESTDIR)$(mandir)/man4/backfire.4.gz"

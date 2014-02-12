@@ -1,3 +1,42 @@
+rt-tests (0.83-1+deb7u1) wheezy; urgency=low
+
+  * backport
+    	dd6ae11 (hackbench: init child's struct before using it)
+    to make hackbench work on armhf. (Closes: #711363)
+
+ -- Uwe Kleine-König <u.kleine-koenig@pengutronix.de>  Wed, 26 Jun 2013 20:32:10 +0200
+
+rt-tests (0.83-1) unstable; urgency=low
+
+  * new upstream release
+
+ -- Uwe Kleine-König <u.kleine-koenig@pengutronix.de>  Fri, 02 Dec 2011 10:40:15 +0100
+
+rt-tests (0.74-1) unstable; urgency=low
+
+  * new upstream release
+  * Fix dkms warning (Closes: LP: #681908). Patch by eraserix, thanks.
+  * add build-{arch,indep} targets to debian/rules
+  * new patch providing a man page for pip_stress to make lintian a bit
+    happier.
+  * provide sequence as first parameter to dh for debhelper compatitility
+    level 8 and switch to level 8
+  * Standards-Version: 3.9.2 (no changes needed)
+  * new patch to fix wording for error message when setting the
+    scheduling policy fails (Closes: #619938)
+  * drop patch kernvar_fix_possible_buffer_overflow (applied upstream)
+
+ -- Uwe Kleine-König <u.kleine-koenig@pengutronix.de>  Fri, 26 Aug 2011 09:25:37 +0200
+
+rt-tests (0.72-1) unstable; urgency=low
+
+  * new upstream release
+  * new patch kernvar_fix_possible_buffer_overflow
+  * use Architecture: linux-any (Closes: #604691)
+  * Standards-Version: 3.9.1 (no changes needed)
+
+ -- Uwe Kleine-König <u.kleine-koenig@pengutronix.de>  Sun, 20 Mar 2011 16:31:36 +0100
+
 rt-tests (0.71-1) unstable; urgency=low
 
   * new upstream release
