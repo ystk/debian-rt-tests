@@ -1,7 +1,7 @@
 /*
  * High resolution timer test software
  *
- * (C) 2008-2010 Clark Williams <williams@redhat.com>
+ * (C) 2008-2011 Clark Williams <williams@redhat.com>
  * (C) 2005-2007 Thomas Gleixner <tglx@linutronix.de>
  *
  * This program is free software; you can redistribute it and/or
@@ -12,6 +12,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -34,6 +36,9 @@
 #include "rt_numa.h"
 
 #include "rt-utils.h"
+
+#define DEFAULT_INTERVAL 1000
+#define DEFAULT_DISTANCE 500
 
 #ifndef SCHED_IDLE
 #define SCHED_IDLE 5
@@ -64,14 +69,17 @@ static int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec 
 	return syscall(__NR_clock_nanosleep, clock_id, flags, req, rem);
 }
 
-static int sched_setaffinity(pid_t pid, unsigned int cpusetsize,
-		cpu_set_t *mask)
+int sched_setaffinity (__pid_t __pid, size_t __cpusetsize,
+                              __const cpu_set_t *__cpuset)
 {
 	return -EINVAL;
 }
 
-static void CPU_SET(int cpu, cpu_set_t *set) { }
-static void CPU_ZERO(cpu_set_t *set) { }
+#undef CPU_SET
+#undef CPU_ZERO
+#define CPU_SET(cpu, cpusetp)
+#define CPU_ZERO(cpusetp)
+
 #else
 extern int clock_nanosleep(clockid_t __clock_id, int __flags,
 			   __const struct timespec *__req,
@@ -98,15 +106,18 @@ extern int clock_nanosleep(clockid_t __clock_id, int __flags,
 #define KVARNAMELEN		32
 #define KVALUELEN		32
 
+int enable_events;
+
 enum {
 	NOTRACE,
-	EVENTS,
 	CTXTSWITCH,
 	IRQSOFF,
 	PREEMPTOFF,
-	IRQPREEMPTOFF,
+	PREEMPTIRQSOFF,
 	WAKEUP,
 	WAKEUPRT,
+	LATENCY,
+	FUNCTION,
 	CUSTOM,
 };
 
@@ -147,13 +158,14 @@ struct thread_stat {
 
 static int shutdown;
 static int tracelimit = 0;
-static int ftrace = 1;
+static int ftrace = 0;
 static int kernelversion;
 static int verbose = 0;
 static int oscope_reduction = 1;
 static int lockall = 0;
 static int tracetype = NOTRACE;
 static int histogram = 0;
+static int histofall = 0;
 static int duration = 0;
 static int use_nsecs = 0;
 static int refresh_on_max;
@@ -164,6 +176,7 @@ static pthread_mutex_t refresh_on_max_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static pthread_mutex_t break_thread_id_lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t break_thread_id = 0;
+static uint64_t break_thread_value = 0;
 
 /* Backup of kernel variables that we modify */
 static struct kvars {
@@ -178,11 +191,45 @@ static char **traceptr;
 static int traceopt_count;
 static int traceopt_size;
 
+static int latency_target_fd = -1;
+static int32_t latency_target_value = 0;
+
+/* Latency trick
+ * if the file /dev/cpu_dma_latency exists,
+ * open it and write a zero into it. This will tell 
+ * the power management system not to transition to 
+ * a high cstate (in fact, the system acts like idle=poll)
+ * When the fd to /dev/cpu_dma_latency is closed, the behavior
+ * goes back to the system default.
+ * 
+ * Documentation/power/pm_qos_interface.txt
+ */
+static void set_latency_target(void)
+{
+	struct stat s;
+	int ret;
+
+	if (stat("/dev/cpu_dma_latency", &s) == 0) {
+		latency_target_fd = open("/dev/cpu_dma_latency", O_RDWR);
+		if (latency_target_fd == -1)
+			return;
+		ret = write(latency_target_fd, &latency_target_value, 4);
+		if (ret == 0) {
+			printf("# error setting cpu_dma_latency to %d!: %s\n", latency_target_value, strerror(errno));
+			close(latency_target_fd);
+			return;
+		}
+		printf("# /dev/cpu_dma_latency set to %dus\n", latency_target_value);
+	}
+}
+
+
 enum kernelversion {
-	KV_NOT_26,
+	KV_NOT_SUPPORTED,
 	KV_26_LT18,
 	KV_26_LT24,
-	KV_26_CURR
+	KV_26_33,
+	KV_30
 };
 
 enum {
@@ -193,14 +240,23 @@ enum {
 static char functiontracer[MAX_PATH];
 static char traceroptions[MAX_PATH];
 
+static int trace_fd     = -1;
+
 static int kernvar(int mode, const char *name, char *value, size_t sizeofvalue)
 {
 	char filename[128];
 	int retval = 1;
 	int path;
+	size_t len_prefix = strlen(fileprefix), len_name = strlen(name);
 
-	strncpy(filename, fileprefix, sizeof(filename));
-	strncat(filename, name, sizeof(filename) - strlen(fileprefix));
+	if (len_prefix + len_name + 1 > sizeof(filename)) {
+		errno = ENOMEM;
+		return 1;
+	}
+
+	memcpy(filename, fileprefix, len_prefix);
+	memcpy(filename + len_prefix, name, len_name + 1);
+
 	path = open(filename, mode);
 	if (path >= 0) {
 		if (mode == O_RDONLY) {
@@ -223,7 +279,7 @@ static void setkernvar(const char *name, char *value)
 	int i;
 	char oldvalue[KVALUELEN];
 
-	if (kernelversion != KV_26_CURR) {
+	if (kernelversion < KV_26_33) {
 		if (kernvar(O_RDONLY, name, oldvalue, sizeof(oldvalue)))
 			fprintf(stderr, "could not retrieve %s\n", name);
 		else {
@@ -270,18 +326,18 @@ static inline void tsnorm(struct timespec *ts)
 	}
 }
 
-static inline long long calcdiff(struct timespec t1, struct timespec t2)
+static inline int64_t calcdiff(struct timespec t1, struct timespec t2)
 {
-	long long diff;
+	int64_t diff;
 	diff = USEC_PER_SEC * (long long)((int) t1.tv_sec - (int) t2.tv_sec);
 	diff += ((int) t1.tv_nsec - (int) t2.tv_nsec) / 1000;
 	return diff;
 }
 
-static inline long long calcdiff_ns(struct timespec t1, struct timespec t2)
+static inline int64_t calcdiff_ns(struct timespec t1, struct timespec t2)
 {
-	long long diff;
-	diff = NSEC_PER_SEC * (long long)((int) t1.tv_sec - (int) t2.tv_sec);
+	int64_t diff;
+	diff = NSEC_PER_SEC * (int64_t)((int) t1.tv_sec - (int) t2.tv_sec);
 	diff += ((int) t1.tv_nsec - (int) t2.tv_nsec);
 	return diff;
 }
@@ -305,9 +361,7 @@ void traceopt(char *option)
 	traceptr[traceopt_count++] = ptr;
 }
 
-
-static int
-trace_file_exists(char *name)
+static int trace_file_exists(char *name)
 {
 	struct stat sbuf;
 	char *tracing_prefix = get_debugfileprefix();
@@ -322,24 +376,19 @@ void tracing(int on)
 		switch (kernelversion) {
 		case KV_26_LT18: gettimeofday(0,(struct timezone *)1); break;
 		case KV_26_LT24: prctl(0, 1); break;
-		case KV_26_CURR: 
-			if (trace_file_exists("tracing_on"))
-				setkernvar("tracing_on", "1"); 
-			else
-				setkernvar("tracing_enabled", "1");
+		case KV_26_33: 
+		case KV_30:
+			write(trace_fd, "1", 1);
 			break;
-
 		default:	 break;
 		}
 	} else {
 		switch (kernelversion) {
 		case KV_26_LT18: gettimeofday(0,0); break;
 		case KV_26_LT24: prctl(0, 0); break;
-		case KV_26_CURR: 
-			if (trace_file_exists("tracing_on"))
-				setkernvar("tracing_on", "0"); 
-			else
-				setkernvar("tracing_enabled", "0"); 
+		case KV_26_33: 
+		case KV_30:
+			write(trace_fd, "0", 1);
 			break;
 		default:	break;
 		}
@@ -348,44 +397,11 @@ void tracing(int on)
 
 static int settracer(char *tracer)
 {
-	char filename[MAX_PATH];
-	char tracers[MAX_PATH];
-	char *name;
-	FILE *fp;
-	int ret = -1;
-	int len;
-	const char *delim = " \t\n";
-	char *prefix = get_debugfileprefix();
-
-	/* Make sure tracer is available */
-	strncpy(filename, prefix, sizeof(filename));
-	strncat(filename, "available_tracers", 
-		sizeof(filename) - strlen(prefix));
-
-	fp = fopen(filename, "r");
-	if (!fp)
-		return -1;
-
-	if (!(len = fread(tracers, 1, sizeof(tracers), fp))) {
-		fclose(fp);
-		return -1;
-	}
-	tracers[len] = '\0';
-	fclose(fp);
-
-	name = strtok(tracers, delim);
-	while (name) {
-		if (strcmp(name, tracer) == 0) {
-			ret = 0;
-			break;
-		}
-		name = strtok(NULL, delim);
-	}
-
-	if (!ret)
+	if (valid_tracer(tracer)) {
 		setkernvar("current_tracer", tracer);
-
-	return ret;
+		return 0;
+	}
+	return -1;
 }
 
 static void setup_tracer(void)
@@ -393,42 +409,52 @@ static void setup_tracer(void)
 	if (!tracelimit)
 		return;
 
-	if (kernelversion == KV_26_CURR) {
+	if (mount_debugfs(NULL))
+		fatal("could not mount debugfs");
+
+	if (kernelversion >= KV_26_33) {
 		char testname[MAX_PATH];
 
 		fileprefix = get_debugfileprefix();
-		strcpy(testname, fileprefix);
-		strcat(testname, "tracing_enabled");
-		if (access(testname, R_OK))
-			warn("%s not found\n"
+		if (!trace_file_exists("tracing_enabled") &&
+		    !trace_file_exists("tracing_on"))
+			warn("tracing_enabled or tracing_on not found\n"
 			    "debug fs not mounted, "
 			    "TRACERs not configured?\n", testname);
 	} else
 		fileprefix = procfileprefix;
 
-	if (kernelversion == KV_26_CURR) {
-		char buffer[32];
+	if (kernelversion >= KV_26_33) {
 		int ret;
 
-		setkernvar("tracing_enabled", "1");
-
-		sprintf(buffer, "%d", tracelimit);
-		setkernvar("tracing_thresh", buffer);
+		if (trace_file_exists("tracing_enabled") &&
+		    !trace_file_exists("tracing_on"))
+			setkernvar("tracing_enabled", "1");
 
 		/* ftrace_enabled is a sysctl variable */
+		/* turn it on if you're doing anything but nop or event tracing */
+
 		fileprefix = procfileprefix;
-		if (ftrace)
+		if (tracetype)
 			setkernvar("ftrace_enabled", "1");
 		else
 			setkernvar("ftrace_enabled", "0");
 		fileprefix = get_debugfileprefix();
 
+		/*
+		 * Set default tracer to nop.
+		 * this also has the nice side effect of clearing out
+		 * old traces.
+		 */
+		ret = settracer("nop");
+
 		switch (tracetype) {
 		case NOTRACE:
-			if (ftrace)
-				ret = settracer(functiontracer);
-			else
-				ret = 0;
+			/* no tracer specified, use events */
+			enable_events = 1;
+			break;
+		case FUNCTION:
+			ret = settracer("function");
 			break;
 		case IRQSOFF:
 			ret = settracer("irqsoff");
@@ -436,16 +462,17 @@ static void setup_tracer(void)
 		case PREEMPTOFF:
 			ret = settracer("preemptoff");
 			break;
-		case IRQPREEMPTOFF:
+		case PREEMPTIRQSOFF:
 			ret = settracer("preemptirqsoff");
 			break;
-		case EVENTS:
-			ret = settracer("events");
-			if (ftrace)
-				ret = settracer(functiontracer);
-			break;
 		case CTXTSWITCH:
-			ret = settracer("sched_switch");
+			if (valid_tracer("sched_switch"))
+			    ret = settracer("sched_switch");
+			else {
+				if ((ret = event_enable("sched/sched_wakeup")))
+					break;
+				ret = event_enable("sched/sched_switch");
+			}
 			break;
                case WAKEUP:
                        ret = settracer("wakeup");
@@ -465,6 +492,10 @@ static void setup_tracer(void)
 			}
 			break;
 		}
+
+		if (enable_events)
+			/* turn on all events */
+			event_enable_all();
 
 		if (ret)
 			fprintf(stderr, "Requested tracer '%s' not available\n", tracer);
@@ -486,7 +517,21 @@ static void setup_tracer(void)
 				setkernvar(traceroptions, traceptr[i]);
 		}
 		setkernvar("tracing_max_latency", "0");
-		setkernvar("latency_hist/wakeup_latency/reset", "1");
+		if (trace_file_exists("latency_hist"))
+			setkernvar("latency_hist/wakeup/reset", "1");
+
+		/* open the tracing on file descriptor */
+		if (trace_fd == -1) {
+			char path[MAX_PATH];
+			strcpy(path, fileprefix);
+			if (trace_file_exists("tracing_on"))
+				strcat(path, "tracing_on");
+			else
+				strcat(path, "tracing_enabled");
+			if ((trace_fd = open(path, O_WRONLY)) == -1)
+				fatal("unable to open %s for tracing", path);
+		}
+
 	} else {
 		setkernvar("trace_all_cpus", "1");
 		setkernvar("trace_freerunning", "1");
@@ -500,6 +545,7 @@ static void setup_tracer(void)
 		if (ftrace)
 			setkernvar("mcount_enabled", "1");
 		setkernvar("trace_enabled", "1");
+		setkernvar("latency_hist/wakeup_latency/reset", "1");
 	}
 
 	tracing(1);
@@ -599,8 +645,11 @@ void *timerthread(void *param)
 
 	/* Get current time */
 	clock_gettime(par->clock, &now);
+
 	next = now;
-	next.tv_sec++;
+	next.tv_sec += interval.tv_sec;
+	next.tv_nsec += interval.tv_nsec;
+	tsnorm(&next);
 
 	if (duration) {
 		memset(&stop, 0, sizeof(stop)); /* grrr */
@@ -630,7 +679,7 @@ void *timerthread(void *param)
 
 	while (!shutdown) {
 
-		long diff;
+		uint64_t diff;
 		int sigs, ret;
 
 		/* Wait for next period */
@@ -670,6 +719,7 @@ void *timerthread(void *param)
 			tsnorm(&next);
 			break;
 		}
+
 		clock_gettime(par->clock, &now);
 
 		if (use_nsecs)
@@ -695,6 +745,7 @@ void *timerthread(void *param)
 			pthread_mutex_lock(&break_thread_id_lock);
 			if (break_thread_id == 0)
 				break_thread_id = stat->tid;
+			break_thread_value = diff;
 			pthread_mutex_unlock(&break_thread_id_lock);
 		}
 		stat->act = diff;
@@ -781,6 +832,7 @@ static void display_help(int error)
 	       "-h       --histogram=US    dump a latency histogram to stdout after the run\n"
                "                           (with same priority about many threads)\n"
 	       "                           US is the max time to be be tracked in microseconds\n"
+	       "-H       --histofall=US    same as -h except with an additional summary column\n"
 	       "-i INTV  --interval=INTV   base interval of thread in us default=1000\n"
 	       "-I       --irqsoff         Irqsoff tracing (used with -b)\n"
 	       "-l LOOPS --loops=LOOPS     number of loops: default=0(endless)\n"
@@ -828,8 +880,8 @@ static int num_threads = 1;
 static int max_cycles;
 static int clocksel = 0;
 static int quiet;
-static int interval = 1000;
-static int distance = 500;
+static int interval = DEFAULT_INTERVAL;
+static int distance = -1;
 static int affinity = 0;
 static int smp = 0;
 
@@ -905,6 +957,7 @@ static void process_options (int argc, char *argv[])
 			{"event", no_argument, NULL, 'E'},
 			{"ftrace", no_argument, NULL, 'f'},
 			{"histogram", required_argument, NULL, 'h'},
+			{"histofall", required_argument, NULL, 'H'},
 			{"interval", required_argument, NULL, 'i'},
 			{"irqsoff", no_argument, NULL, 'I'},
 			{"loops", required_argument, NULL, 'l'},
@@ -930,9 +983,10 @@ static void process_options (int argc, char *argv[])
 			{"traceopt", required_argument, NULL, 'O'},
 			{"smp", no_argument, NULL, 'S'},
 			{"numa", no_argument, NULL, 'U'},
+			{"latency", required_argument, NULL, 'e'},
 			{NULL, 0, NULL, 0}
 		};
-		int c = getopt_long(argc, argv, "a::b:Bc:Cd:Efh:i:Il:MnNo:O:p:PmqrsSt::uUvD:wWT:y:",
+		int c = getopt_long(argc, argv, "a::b:Bc:Cd:Efh:H:i:Il:MnNo:O:p:PmqrsSt::uUvD:wWT:y:e:",
 				    long_options, &option_index);
 		if (c == -1)
 			break;
@@ -953,15 +1007,24 @@ static void process_options (int argc, char *argv[])
 			}
 			break;
 		case 'b': tracelimit = atoi(optarg); break;
-		case 'B': tracetype = IRQPREEMPTOFF; break;
+		case 'B': tracetype = PREEMPTIRQSOFF; break;
 		case 'c': clocksel = atoi(optarg); break;
 		case 'C': tracetype = CTXTSWITCH; break;
 		case 'd': distance = atoi(optarg); break;
-		case 'E': tracetype = EVENTS; break;
-		case 'f': ftrace = 1; break;
+		case 'E': enable_events = 1; break;
+		case 'f': tracetype = FUNCTION; ftrace = 1; break;
+		case 'H': histofall = 1; /* fall through */
 		case 'h': histogram = atoi(optarg); break;
 		case 'i': interval = atoi(optarg); break;
-		case 'I': tracetype = IRQSOFF; break;
+		case 'I':
+			if (tracetype == PREEMPTOFF) {
+				tracetype = PREEMPTIRQSOFF;
+				strncpy(tracer, "preemptirqsoff", sizeof(tracer));
+			} else {
+				tracetype = IRQSOFF;
+				strncpy(tracer, "irqsoff", sizeof(tracer));
+			}
+			break;
 		case 'l': max_cycles = atoi(optarg); break;
 		case 'n': use_nanosleep = MODE_CLOCK_NANOSLEEP; break;
 		case 'N': use_nsecs = 1; break;
@@ -972,7 +1035,15 @@ static void process_options (int argc, char *argv[])
 			if (policy != SCHED_FIFO && policy != SCHED_RR)
 				policy = SCHED_FIFO;
 			break;
-		case 'P': tracetype = PREEMPTOFF; break;
+		case 'P':
+			if (tracetype == IRQSOFF) {
+				tracetype = PREEMPTIRQSOFF;
+				strncpy(tracer, "preemptirqsoff", sizeof(tracer));
+			} else {
+				tracetype = PREEMPTOFF;
+				strncpy(tracer, "preemptoff", sizeof(tracer));
+			}
+			break;
 		case 'q': quiet = 1; break;
 		case 'r': timermode = TIMER_RELTIME; break;
 		case 's': use_system = MODE_SYS_OFFSET; break;
@@ -1018,10 +1089,17 @@ static void process_options (int argc, char *argv[])
 			setaffinity = AFFINITY_USEALL;
 			use_nanosleep = MODE_CLOCK_NANOSLEEP;
 #else
-			warn("cyclicteset was not built with the numa option\n");
+			warn("cyclictest was not built with the numa option\n");
 			warn("ignoring --numa or -U\n");
 #endif
 			break;
+		case 'e': /* power management latency target value */
+			  /* note: default is 0 (zero) */
+			latency_target_value = atoi(optarg);
+			if (latency_target_value < 0)
+				latency_target_value = 0;
+			break;
+
 		case '?': display_help(0); break;
 		}
 	}
@@ -1054,6 +1132,11 @@ static void process_options (int argc, char *argv[])
 	if (histogram > HIST_MAX)
 		histogram = HIST_MAX;
 
+	if (histogram && distance != -1)
+		warn("distance is ignored and set to 0, if histogram enabled\n");
+	if (distance == -1)
+		distance = DEFAULT_DISTANCE;
+
 	if (priority < 0 || priority > 99)
 		error = 1;
 
@@ -1084,7 +1167,7 @@ static int check_kernel(void)
 	if (ret) {
 		fprintf(stderr, "uname failed: %s. Assuming not 2.6\n",
 				strerror(errno));
-		return KV_NOT_26;
+		return KV_NOT_SUPPORTED;
 	}
 	sscanf(kname.release, "%d.%d.%d", &maj, &min, &sub);
 	if (maj == 2 && min == 6) {
@@ -1093,16 +1176,21 @@ static int check_kernel(void)
 		else if (sub < 24)
 			kv = KV_26_LT24;
 		else if (sub < 28) {
-			kv = KV_26_CURR;
+			kv = KV_26_33;
 			strcpy(functiontracer, "ftrace");
 			strcpy(traceroptions, "iter_ctrl");
 		} else {
-			kv = KV_26_CURR;
+			kv = KV_26_33;
 			strcpy(functiontracer, "function");
 			strcpy(traceroptions, "trace_options");
 		}
+	} else if (maj == 3) {
+		kv = KV_30;
+		strcpy(functiontracer, "function");
+		strcpy(traceroptions, "trace_options");
+		
 	} else
-		kv = KV_NOT_26;
+		kv = KV_NOT_SUPPORTED;
 
 	return kv;
 }
@@ -1139,33 +1227,64 @@ static void print_tids(struct thread_param *par[], int nthreads)
 static void print_hist(struct thread_param *par[], int nthreads)
 {
 	int i, j;
-	unsigned long long log_entries[nthreads];
+	unsigned long long int log_entries[nthreads+1];
+	unsigned long maxmax, alloverflows;
 
 	bzero(log_entries, sizeof(log_entries));
 
 	printf("# Histogram\n");
 	for (i = 0; i < histogram; i++) {
+		unsigned long long int allthreads = 0;
 
 		printf("%06d ", i);
 
 		for (j = 0; j < nthreads; j++) {
 			unsigned long curr_latency=par[j]->stats->hist_array[i];
-			printf("%06lu\t", curr_latency);
+			printf("%06lu", curr_latency);
+			if (j < nthreads - 1)
+				printf("\t");
 			log_entries[j] += curr_latency;
+			allthreads += curr_latency;
+		}
+		if (histofall && nthreads > 1) {
+			printf("\t%06llu", allthreads);
+			log_entries[nthreads] += allthreads;
 		}
 		printf("\n");
 	}
 	printf("# Total:");
 	for (j = 0; j < nthreads; j++)
 		printf(" %09llu", log_entries[j]);
+	if (histofall && nthreads > 1)
+		printf(" %09llu", log_entries[nthreads]);
 	printf("\n");
-	printf("# Max Latencys:");
+	printf("# Min Latencies:");
 	for (j = 0; j < nthreads; j++)
-		printf(" %05lu", par[j]->stats->max);
+		printf(" %05lu", par[j]->stats->min);
+	printf("\n");
+	printf("# Avg Latencies:");
+	for (j = 0; j < nthreads; j++)
+		printf(" %05lu", par[j]->stats->cycles ?
+		       (long)(par[j]->stats->avg/par[j]->stats->cycles) : 0);
+	printf("\n");
+	printf("# Max Latencies:");
+	maxmax = 0;
+	for (j = 0; j < nthreads; j++) {
+ 		printf(" %05lu", par[j]->stats->max);
+		if (par[j]->stats->max > maxmax)
+			maxmax = par[j]->stats->max;
+	}
+	if (histofall && nthreads > 1)
+		printf(" %05lu", maxmax);
 	printf("\n");
 	printf("# Histogram Overflows:");
-	for (j = 0; j < nthreads; j++)
-		printf(" %05lu", par[j]->stats->hist_overflow);
+	alloverflows = 0;
+	for (j = 0; j < nthreads; j++) {
+ 		printf(" %05lu", par[j]->stats->hist_overflow);
+		alloverflows += par[j]->stats->hist_overflow;
+	}
+	if (histofall && nthreads > 1)
+		printf(" %05lu", alloverflows);
 	printf("\n");
 }
 
@@ -1226,18 +1345,20 @@ int main(int argc, char **argv)
 	/* Checks if numa is on, program exits if numa on but not available */
 	numa_on_and_available();
 
-	/* lock all memory (prevent paging) */
+	/* lock all memory (prevent swapping) */
 	if (lockall)
 		if (mlockall(MCL_CURRENT|MCL_FUTURE) == -1) {
 			perror("mlockall");
 			goto out;
 		}
 
+	/* use the /dev/cpu_dma_latency trick if it's there */
+	set_latency_target();
 
 	kernelversion = check_kernel();
 
-	if (kernelversion == KV_NOT_26)
-		warn("Most functions require kernel 2.6\n");
+	if (kernelversion == KV_NOT_SUPPORTED)
+		warn("Running on unknown kernel version...YMMV\n");
 
 	setup_tracer();
 
@@ -1245,7 +1366,7 @@ int main(int argc, char **argv)
 		warn("High resolution timers not available\n");
 
 	mode = use_nanosleep + use_system;
- 
+
 	sigemptyset(&sigset);
 	sigaddset(&sigset, signum);
 	sigprocmask (SIG_BLOCK, &sigset, NULL);
@@ -1355,7 +1476,7 @@ int main(int argc, char **argv)
 		case AFFINITY_USEALL: par->cpu = i % max_cpus; break;
 		}
 		stat->min = 1000000;
-		stat->max = -1000000;
+		stat->max = 0;
 		stat->avg = 0.0;
 		stat->threadstarted = 1;
 		status = pthread_create(&stat->thread, &attr, timerthread, par);
@@ -1438,8 +1559,10 @@ int main(int argc, char **argv)
 
 	if (tracelimit) {
 		print_tids(parameters, num_threads);
-		if (break_thread_id)
+		if (break_thread_id) {
 			printf("# Break thread: %d\n", break_thread_id);
+			printf("# Break value: %lu\n", break_thread_value);
+		}
 	}
 	
 
@@ -1460,13 +1583,31 @@ int main(int argc, char **argv)
 	if (tracelimit)
 		tracing(0);
 
+
+	/* close any tracer file descriptors */
+	if (trace_fd >= 0)
+		close(trace_fd);
+
+	/* turn off all events */
+	event_disable_all();
+
+	/* turn off the function tracer */
+	fileprefix = procfileprefix;
+	if (tracetype)
+		setkernvar("ftrace_enabled", "0");
+	fileprefix = get_debugfileprefix();
+
 	/* unlock everything */
 	if (lockall)
 		munlockall();
 
 	/* Be a nice program, cleanup */
-	if (kernelversion != KV_26_CURR)
+	if (kernelversion < KV_26_33)
 		restorekernvars();
+
+	/* close the latency_target_fd if it's open */
+	if (latency_target_fd >= 0)
+		close(latency_target_fd);
 
 	exit(ret);
 }
