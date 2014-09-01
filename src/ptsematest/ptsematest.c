@@ -36,6 +36,7 @@
 #include <utmpx.h>
 #include "rt-utils.h"
 #include "rt-get_cpu.h"
+#include "error.h"
 
 #include <pthread.h>
 
@@ -388,12 +389,12 @@ int main(int argc, char *argv[])
 					(int) ((receiver[i].sumdiff / receiver[i].samples) + 0.5),
 					receiver[i].maxdiff);
 				if (receiver[i].error[0] != '\0') {
-					printf(receiver[i].error);
+					printf("%s", receiver[i].error);
 					errorlines++;
 					receiver[i].error[0] = '\0';
 				}
 				if (sender[i].error[0] != '\0') {
-					printf(sender[i].error);
+					printf("%s", sender[i].error);
 					errorlines++;
 					receiver[i].error[0] = '\0';
 				}

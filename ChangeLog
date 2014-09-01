@@ -1,13 +1,1000 @@
-commit 649480fd1f14d3079a41c68b7f29c5fff5ad07ab
-Merge: b1da997 5f1e84f
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Dec 2 10:32:10 2011 +0100
+commit 041e643710fd286c550650cfe2813b540d516204
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Sun Mar 30 11:05:49 2014 -0500
 
-    Merge tag 'v0.83' of git://github.com/clrkwllms/rt-tests
+    cyclictest: fix leftover debbuging comment in argument processing
     
-    Further update changelog and refresh patches
+    Left a single line comment in the switch statement for handling
+    affinity options. Removed it.
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 266a7b90a5c309327efd519c2c31571af1e0ea15
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Sat Mar 29 10:39:26 2014 -0500
+
+    hwlatdetect: convert to run with both python2 and python3
+    
+    Ran 2to3 on hwlatdetect.py and checked in the result. Tested
+    on F20 system running 3.12.14-rt23 with both python2 and python3.
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit a7fbe4c58b94bb138cb76af43ff94f65bda63002
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Fri Mar 28 09:26:31 2014 -0500
+
+    version bump to 0.88
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 9bdd51a808b3c3d05c33eef9d7b3536099fa1170
+Author: Gary S. Robertson <gary.robertson@linaro.org>
+Date:   Tue Mar 25 18:05:32 2014 -0500
+
+    cyclictest: Don't offer --numa option when unavailable
+    
+    Signed-off-by: Gary S. Robertson <gary.robertson@linaro.org>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 618427fab929656e062dbc10858a32722a524c88
+Author: Gary S. Robertson <gary.robertson@linaro.org>
+Date:   Tue Mar 25 18:05:31 2014 -0500
+
+    cyclictest: Restore CPU affinity function for non-NUMA builds
+    
+    Signed-off-by: Gary S. Robertson <gary.robertson@linaro.org>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 87f11582451733f9e37ccae470fca70e1e83a17c
+Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date:   Fri Jan 31 14:07:20 2014 -0600
+
+    cyclictest: Fix tracemark output when the latency threshold is hit on ARM
+    
+    on ARM I'm seeing output like:
+    
+    	cyclicte-623     0....... 19619418us+: tracing_mark_write: hit latency threshold (2000 > 2097)
+    
+    That's because of a format mismatch in
+    
+    	tracemark("hit latency threshold (%d > %d)", diff, tracelimit);
+    
+    diff is a u64 and tracelimit an int. So on ARM the string is passed in r0,
+    tracelimit in r1 and diff in r2+r3. vsnprintf used in tracemark only
+    expects two ints passed and so only uses r1 and r2 yielding the permutation
+    in the output.
+    
+    This patch also adds a gcc attribute to tracemark that helps catching
+    similar bugs. In this case just adding the attribute but not touching
+    the call site, would result in:
+    
+    	src/cyclictest/cyclictest.c: In function ‘timerthread’:
+    	src/cyclictest/cyclictest.c:899:4: warning: format ‘%d’ expects argument of type ‘int’, but argument 2 has type ‘uint64_t’ [-Wformat]
+    
+    ---
+    Hello
+    
+    after some chatting with Clark and John I dropped the c99 stuff and added the
+    attribute annotation.
     
     Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 3917fdbe56a8e8716f3d1ba93806083e598d3e49
+Author: Ciprian Barbu <ciprian.barbu@linaro.org>
+Date:   Thu Dec 12 16:47:19 2013 +0200
+
+    rt-tests: hackbench: fix for uninitialized start time
+    
+    Hello,
+    
+    While playing around with hackbench I discovered that I would sometimes
+    get an enormous time reported, even if the run time would be less than a
+    second or so. The problem was that the struct timeval start was not
+    initialized until after all children have been created. But if the
+    program receives a signal before this is done, the start time is left
+    uninitialized.
+    
+    I propose that in such situations an error message be displayed, like
+    the following patch does.
+    
+    Please let me know if this is acceptable.
+    
+    Regards,
+    /Ciprian
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit b0413ae5ed802004fb0c4af74a1757381fd2b91f
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Wed Dec 11 16:43:14 2013 -0600
+
+    version bump to 0.87
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 7c21340615714a68883cc36f6aad15ef3a817d0f
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Wed Dec 11 15:30:29 2013 -0600
+
+    fixed #ifdef that cuts -A option in display_help()
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 2f060c9ac655b8ecdb0bf3ce827cb8d05dc8b8c5
+Author: Aaron Fabbri <ajfabbri@gmail.com>
+Date:   Tue Sep 3 13:32:50 2013 -0700
+
+    CPU affinity now takes arbitrary set of cpus.
+    
+    e.g.
+      cyclictest -a4,6-8 -t5
+    
+    will use 5 threads, assigned round-robin to the set of CPUs {4,6,7,8}.
+    CPU 4 will get threads 1 and 5, CPU 6 gets thread 2, CPU 7 gets thread 3, and
+    CPU 8 gets thread 4.
+    
+    As explained in the updated manpage, libnuma >= v2 is required for these
+    arbitrary CPU sets.  With libnuma v1, the -a option behaves as before.  As
+    before, compiling without libnuma is supported. The command usage help is fixed
+    up at compile time to always show the correct usage of the -a option.
+    
+    Also note that, since numa_parse_cpustring_all() wasn't available in early
+    libnuma v2 versions, we use numa_parse_cpustring().  This means you'll have to
+    use taskset in some cases (isolcpus kernel parameter) to add the desired CPUs to
+    the set of allowed cores, e.g.:
+    
+      taskset -c4-6 cyclictest -a4-6
+    
+    Tested with out libnuma (numactl), and with versions 1.0.2 and 2.0.9-rc3.
+    
+    Signed-off-by: Aaron Fabbri <ajfabbri@gmail.com>
+    (cherry picked from commit 5375ab86e77881d8043e5e309bb8daf5a84cc05f)
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 7ff65cfa9d4e73841d9dbf05b2678902f12014a7
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Fri Nov 15 15:39:21 2013 -0600
+
+    updated Makefile and do-git-push script to use kup
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 4ab63398b92d693c23e19882a5397ee9b950dfe7
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Fri Nov 15 09:50:49 2013 -0600
+
+    version bump to 0.86
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 1b46049fb5eab8fb8eb52184c362b28b3e20c083
+Author: John Kacur <jkacur@redhat.com>
+Date:   Thu Nov 14 17:40:03 2013 +0100
+
+    cyclictest: Align option fixes
+    
+    These changes make the align option truly optional as claimed.
+    
+    1. Rename disaligned to offset for readability.
+    2. Fix the aligned option so that if no optional argument is given,
+    the offset defaults to 0
+    3. Fix some white space problems as reported by checkpatch.pl in the kernel
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 77d109dbea9b2ae39b87af0f0fbbe343cfea3d09
+Author: Nicholas Mc Guire <der.herr@hofr.at>
+Date:   Wed Nov 13 09:08:05 2013 -0600
+
+    cyclictest: add align thread wakeup times option
+    
+    This patch provides and additional -A/--align flag to cyclictest to align
+    thread wakeup times of all threads as closly defined as possible.
+    
+    When running multiple threads in cyclictest (-S or -t # option) the threads
+    are launched in an unsynchronized manner. Basically the creation order and
+    time for thread creation determines the start time. For provoking a maximum
+    congestion situation (e.g. cache evictions) and to improve reproducibility
+    or run conditions the start time should be defined distances appart. The
+    well defined distance is implemented as a offset parameter to -A/--align
+    and will offset each threads start time by the parameter * the sequentially
+    assigned thread number (par->tnum), together with the -d0 (distance in the
+    intervals of the individual threads) this alignment option allows to get
+    the thread wakeup times as closely synchronized as possible.
+    
+    The method to sync is simply that the thread with par->tnum == 0 is chosen
+    to set a globally shared timestamp, and all other threads use this timestamp
+    as their starting time rather than each calling clock_gettime() at startup.
+    To ensure synchronization of the thread startup the setting of the global
+    time is guarded by pthread_barriers.
+    
+    Signed-off-by: Nicholas Mc Guire <der.herr@hofr.at>
+    Reviewed-by: Andreas Platschek <andreas.platschek@opentech.at>
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit fd37e16b2074fd33566c5188e6ab855f59c90c48
+Author: Nicholas Mc Guire <der.herr@hofr.at>
+Date:   Tue Aug 6 03:23:30 2013 +0200
+
+    minor cleanup in cyclictest
+    
+    HI !
+    
+     just noticed a, presumably, unnecessary tsnorm in cyclictest
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit a3a7ee1a683107158d1627fb2f04f73a159970be
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Thu Apr 11 12:04:29 2013 -0500
+
+    cyclictest: modify option handling to use enumerated types
+    
+    Change return value from option parsing to be enumerated type
+    rather than a character. Hopefully this will clean up the option
+    handling a bit and not confuse me when I come back to add yet
+    another option to cyclictest.
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit dd6ae1155dc7fbee79426ae5952d48b4151c1cd7
+Author: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Date:   Thu Apr 11 17:20:05 2013 +0200
+
+    hackbench: init child's struct before using it
+    
+    Commit ad27df7 ("Reimplement better child tracking and improve error
+    handling") changed the way of reporting pid/error after creating a
+    child. It will return an union which is a mix pid_t, pthread_t and a
+    signed long long for errors.
+    Now on 32bit x86 both pid_t and pthread_t are four byte in size and are
+    stored in the first 4 bytes. Now if the most significant bit of the long
+    long variable happens to be set by chance (because nobody really
+    initializes the variable here) then error variable will be negative. On
+    little endian machines the assignment of pid or threadid won't reset the
+    sign bit and you see this:
+    
+    | Running in process mode with 10 groups using 40 file descriptors each (== 400 tasks)
+    | Each sender will pass 100 messages of 100 bytes
+    | 0 children started.  Expected 40
+    | sending SIGTERM to all child processes
+    | signaling 0 worker threads to terminate
+    | Creating workers (error: Success)
+    
+    A machine with proper endian handlig (that is big endian) would reset
+    the sign bit during the assignment of pid and I would not have to make
+    this patch :)
+    
+    While here, I make create_worker() since it is not used outside of this
+    file.
+    
+    Cc: David Sommerseth <davids@redhat.com>
+    Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 83adb67c7928a73f6434e98cba736717d656ceb4
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Wed Mar 13 19:36:29 2013 -0500
+
+    cyclictest: allow break threshold without doing any tracing
+    
+    Add the --notrace/-A option, intended to be used in conjunction
+    with the -b option. This will cause cyclictest to exit when a
+    threshold is hit, but will not perform any tracing operations,
+    allowing more sophisticated tracing to be done externally.
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 1906cc53f5c4e6803cd91403d327c7da272d389a
+Author: Clark Williams <clark.williams@gmail.com>
+Date:   Wed Mar 13 16:53:53 2013 -0500
+
+    cyclictest: add named fifo for statistics
+    
+    This code adds the -F/--fifo option to cyclictest. Using the
+    --fifo <path> option will cause cyclictest to create a named
+    fifo at <path> and will dump the current run statistics to that
+    fifo when it is opened an read.
+    
+    Signed-off-by: Clark Williams <clark.williams@gmail.com>
+
+commit 1b92da30837e9552aba209cbdf938877f0fd3bbf
+Author: Jim Somerville <Jim.Somerville@windriver.com>
+Date:   Thu Feb 14 17:23:14 2013 -0500
+
+    cyclictest: finish removal of 1 second first loops
+    
+    Huge latencies are observed (close to 1 second) when certain
+    options are used in cyclictest.
+    
+    The problem was 1st introduced at commit da4956cbcaf7945554f
+    ("use interval on first loop instead of 1 second").  It removed
+    the 1 second first timing loop out of the main path in cyclictest
+    but left it in two other paths, namely the ones triggered by
+    these two options:
+    
+        -r   --relative    use relative timer instead of absolute
+        -s   --system      use sys_nanosleep and sys_setitimer
+    
+    which in turn causes the huge latencies of close to 1 second to
+    be reported by cyclictest with certain uses of those two options.
+    
+    Here we extend the original commit to remove the 1 second
+    hardcoded timer values from the RELTIME and ITIMER options, by
+    simply using the actual interval provided instead.
+    
+    Signed-off-by: Jim Somerville <Jim.Somerville@windriver.com>
+    Cc: Clark Williams <williams@redhat.com>
+    Cc: John Kacur <jkacur@redhat.com>
+    Cc: Steven Rostedt <rostedt@goodmis.org>
+    Signed-off-by: Paul Gortmaker <paul.gortmaker@windriver.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit b2689a768a3fbdb8fb717719b384855440efec59
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Feb 15 15:02:21 2013 +0100
+
+    Makefile: Don't tag files in dir BUILD from rpm builds
+    
+    Don't tag copies of files in BUILD created when building an rpm
+    Without this change tags finds both copies, eg: for tag cyclictest.c
+      # pri kind tag               file
+      1 F   F    cyclictest.c      BUILD/rt-tests/src/cyclictest/cyclictest.c
+                   1
+      2 F   F    cyclictest.c      src/cyclictest/cyclictest.c
+    
+    With this change, only the later one is found
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 7ffb5a6e20aafaf1e5c1389bf69da15b47923c37
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Mon Feb 11 13:46:30 2013 -0800
+
+    rt-tests: NUMA optional for make rpm
+    
+    version 2:
+      - Add new placeholders in rt-tests.spec-in to make the replacements by
+        "make rpm" more visible to future maintainers of rt-tests.spec-in
+      - fix typo of my name in rt-tests.spec-in
+    
+    rt-tests can be built without NUMA:
+    
+       make NUMA=0
+    
+    But "make rpm" does not have a way to be successful without NUMA:
+    
+       build_rt-tests_0.85> make rpm
+       for F in cyclictest signaltest pi_stress rt-migrate-test ptsematest sigwaittest svsematest pmqtest sendme pip_stress hackbench *.o .depend *.*~ *.orig *.rej rt-tests.spec *.d *.a  ChangeLog; do find -type f -name $F | xargs rm -f; done
+       rm -f hwlatdetect
+       rm -f tags
+       rm -rf BUILD BUILDROOT RPMS SRPMS SPECS releases *.tar.gz rt-tests.spec tmp
+       git log >ChangeLog
+       mkdir -p releases
+       mkdir -p tmp/rt-tests
+       cp -r Makefile COPYING ChangeLog src tmp/rt-tests
+       tar -C tmp -czf rt-tests-0.85.tar.gz rt-tests
+       rm -f ChangeLog
+       cp rt-tests-0.85.tar.gz releases
+       sed s/__VERSION__/0.85/ <rt-tests.spec-in >rt-tests.spec
+       rpmbuild -ba --define "_topdir /a/home/frowand/me/src/rt-tests/build_rt-tests_0.85" --define "_sourcedir /a/home/frowand/me/src/rt-tests/build_rt-tests_0.85/releases" --define "_builddir /a/home/frowand/me/src/rt-tests/build_rt-tests_0.85/BUILD"  rt-tests.spec
+       error: Failed build dependencies:
+               numactl-devel is needed by rt-tests-0.85-1.fc12.src
+       make: *** [rpm] Error 1
+    
+    The following patch allows the rpm to be built without NUMA, with the command:
+    
+       make NUMA=0 rpm
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit cc7b99bf4e533a061b30becee9d51552bc3b908b
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Feb 8 15:27:24 2013 +0100
+
+    Makefile: Add BUILDROOT and SPECS to the dirs to remove for distclean
+    
+    make rpm creates the dirs BUILDROOT and SPECS that are missed by distclean.
+    Gather all rpm related DIRS to the RPMDIRS and add that to distclean.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+    Reviewed-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Frank Rowand <frank.rowand@am.sony.com>
+
+commit d29d951dbe3c9ae8144f9a25f37f4009302f675d
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Feb 8 15:18:02 2013 +0100
+
+    Makefile: Add tmp dir to distclean and "make release" call distclean
+    
+    The files in the tmp dir are generated during make release.
+    These are the kind of generated files that should be removed for distclean,
+    So add tmp. make release can be slightly simplified by then depending
+    on distclean instead of clean.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+    Reviewed-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Frank Rowand <frank.rowand@am.sony.com>
+
+commit 0918c34effecae2c21b3eb28fb6d3712dc751863
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Feb 8 15:02:14 2013 +0100
+
+    Makefile: Don't tag tmp files created when making a release
+    
+    Don't tag the copies of the source files placed in the tmp directory
+    during the creation of a release.
+    Without this change tags finds both copies, eg: for tag cyclictest.c
+      # pri kind tag               file
+      1 F C F    cyclictest.c      src/cyclictest/cyclictest.c
+                   1
+      2 F   F    cyclictest.c      tmp/rt-tests/src/cyclictest/cyclictest.c
+                   1
+    
+    With this change only the first one is found.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+    Reviewed-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Frank Rowand <frank.rowand@am.sony.com>
+
+commit 65c27472cc17e867be106eaa0b722082288fe3a6
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Mon Jan 28 18:09:46 2013 -0800
+
+    cyclictest: white space cleanup
+    
+    Clean up cyclictest formatting:
+      Change leading spaces to tabs.
+      Align function parameters.
+      Place type of function on same line as function name.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 210e625227d21e0b589b8eaa36cd81f1cb981819
+Author: Clark Williams <williams@redhat.com>
+Date:   Tue Nov 13 15:43:45 2012 -0600
+
+    version bump to 0.85
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 93e525fac1402e79744cb1a9bb16ef96b98c272b
+Merge: 9854a61 7667ff6
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Nov 9 16:25:18 2012 +0100
+
+    Merge branch 'clrkwllms/work' into rt-tests-0.84-devel
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 9854a61da92d80ccce74e091ddc9d4c0e3983e79
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Mon Aug 13 13:38:25 2012 -0700
+
+    V3: cyclictest: report large measured clock latency
+    
+    V3: Use src/lib/error.c functions instead of fprintf.
+        Fix printf format warnings for 32 bit vs 64 bit systems with cast.
+        One issue with using warn() and info() instead of fprintf is that
+        the compiler no longer warns about format mismatches.
+        Fix bad continuation line white space prefix.
+        Remove unused variable zero_diff.
+    
+    cyclictest: ARM panda clock resolution will be ~30 usec unless
+    CONFIG_OMAP_32K_TIMER=n, resulting in a poor latency report.
+    
+    This patch does _not_ fix the problem, it merely provides the
+    instrumentation to make it visible.  The value of measured
+    resolution is useful information for any system.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    - Fixed up minor white space problem.
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit fcdef80f5f3910f2a9a8f6fcc7045bd068a9bce5
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Mon Aug 13 13:37:42 2012 -0700
+
+    V3: cyclictest: clean up getopt_long() parameters
+    
+    V3: unchanged from V2
+    
+    cyclictest getopt_long() parameter clean up.
+    Clean up before following patch which will add a new option.
+    
+      Some elements of long_options were not in alphabetical order.
+    
+      Some elements of optstring were not in alphabetical order.
+    
+      '-e', '--latency' was missing help text
+    
+      short form of --duration ('D') was missing from optstring
+    
+      Change a few instances of leading spaces to tabs.
+    
+      Add white space to long_options to improve readability.
+    
+      Some cases of the switch processing the result of
+        getopt_long() were not in alphabetical order.
+    
+      Did _not_ clean up option value parsing and processing.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+    
+    Conflicts:
+    	src/cyclictest/cyclictest.c
+
+commit 2400e5e3b561e66a7779a4115e756959d2dcff1c
+Author: John Kacur <jkacur@redhat.com>
+Date:   Tue Oct 16 00:58:46 2012 +0200
+
+    rt-tests Makefile: Add CPPFLAGS to the pattern rule to generate dependencies
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit dfcef6e557b7980a33aa30b45bde196ed1780eb1
+Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date:   Tue Oct 16 00:26:44 2012 +0200
+
+    rt-tests Makefile: separate CFLAGS and CPPFLAGS
+    
+    For compilation to work
+    
+            -D_GNU_SOURCE -Isrc/include
+    
+    is needed to be passed to the compiler. For Debian packaging several
+    things are added but not these two from above. So be a bit more friendly
+    and add them unconditionally. There is no harm if they are included in
+    the user supplied CFLAGS and so passed twice.
+    
+    Moreover be a bit more correct about CFLAGS/CPPFLAGS. Both should be
+    passed to the compiler with CFLAGS taking options for the compiler and
+    CPPFLAGS taking options for the preprocessor. This is also needed for
+    Debian packaging where the helper scripts set CPPFLAGS.
+    
+    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 954e01fe14374466964bed63769cfcf6a98f2aa1
+Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date:   Sun Sep 2 21:46:10 2012 +0200
+
+    rt-tests: have printf use %s format for strings
+    
+    Discovered while compiling with "hardening flags"
+    
+    For Debian 7.0 (aka wheezy) packages it's recommended to use several
+    hardening flags, the default on amd64 being:
+    
+    	CFLAGS=-g -O2 -fstack-protector --param=ssp-buffer-size=4 -Wformat -Werror=format-security
+    	CPPFLAGS=-D_FORTIFY_SOURCE=2
+    	LDFLAGS=-Wl,-z,relro
+    
+    This patch doesn't fix all warnings but at least makes all programs compile
+    again by not using char *variables as printf format strings.
+    
+    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit d63f567c646e07da87d9ce3cce5e5add74c97e16
+Author: John Kacur <jkacur@redhat.com>
+Date:   Wed May 9 17:32:11 2012 +0200
+
+    rt-tests / gitignore: Exclude patches and .a libs too.
+    
+    Minor fix to make working with git nicer.
+    Now that we're building a lib, we need to exclude it from git status output.
+    Do the same for patches we generate or apply.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 992b905d42143f2741b537b60bc51e3fa7c8859d
+Author: Bhavesh Davda <bhavesh@vmware.com>
+Date:   Tue Oct 16 10:02:53 2012 -0700
+
+    cyclictest: histogram overflow instance tracking
+    
+    Add feature to cyclictest histogram mode to track cycle counts every time a
+    sample overflows the histogram limit. This should help identify if there is a
+    timing pattern to jitters in cyclictest runs.
+    
+    Example output (with -h 10):
+     ...
+     Histogram Overflows: 00001 00007 00000 00009 00004 00007 00000 00001
+     Histogram Overflow at cycle number:
+     Thread 0: 09964
+     Thread 1: 00000 00004 00006 00008 00010 09962 11594
+     Thread 2:
+     Thread 3: 01169 04698 06782 09033 10299 11561 21517 28734 29532
+     Thread 4: 11574 11580 11583 11586
+     Thread 5: 00020 09448 13954 14954 18954 20587 24973
+     Thread 6:
+     Thread 7: 18950
+     ...
+    
+    Signed-off-by: Bhavesh Davda <bhavesh@vmware.com>
+    Reviewed-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 18cd9775e55f7bb07f01cc5ef8b1f66fd9a4b318
+Author: Bhavesh Davda <bhavesh@vmware.com>
+Date:   Tue Oct 16 09:39:56 2012 -0700
+
+    cyclictest: whitespace cleanup
+    
+    Cosmetic whitespace cleanup
+    
+    Signed-off-by: Bhavesh Davda <bhavesh@vmware.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 7667ff6946931558ff1c148c067faf34eba2bb5d
+Author: Clark Williams <williams@redhat.com>
+Date:   Thu Aug 30 15:53:35 2012 -0500
+
+    add setup and call of tracemark function for breaktrace
+    
+    Add back call to the tracemark function but only if we're
+    using the breaktrace option and only when we actually hit
+    the breaktrace threshold.
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 857cdd5320ce1f293f5dbcbec79cc8fe22b0bebf
+Author: Clark Williams <williams@redhat.com>
+Date:   Wed May 9 09:38:00 2012 -0500
+
+    version bump to 0.84
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 81c42e0162412cb990354d1ccb9d60d0dc10b79c
+Author: John Kacur <jkacur@redhat.com>
+Date:   Wed May 9 16:03:03 2012 +0200
+
+    rt-tests / cyclictest: Make cyclictest fail if it cannot run with requested priority.
+    
+    Currently if a non-root user requests a priority higher than the soft limit in
+    /etc/security/limits.conf
+    the call to sched_setscheduler will silently fail and the user will be running
+    with priority of 0. Cyclictest will not complain, and display the
+    requested priority resulting in seemingly poor results.
+    
+    The following patch fixes this by doing two things.
+    
+    1. If the requested priority is higher than the soft limit but lower than the
+    hard limit, it will raise the soft limit to the requested priority.
+    
+    2. If the requested priority is higher than the hard limit, it will fail with a
+    warning.
+    
+    The patch should not affect privileged users.
+    
+    Reported-by: Nicholas Mc Guire <der.herr@hofr.at>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 683a326a12e75c6d4afc8b61cfe0cec5c8cb965b
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Thu May 3 12:48:48 2012 -0700
+
+    rt-tests: printf format compile warning
+    
+    V2: use type casting instead of ugly constant in format string
+    
+    Fix printf format string to fix compile warning for ARM 32 bit target.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit e43bee01585e1407c48dc5ecc5f2be74737fd336
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Wed May 2 17:02:40 2012 -0700
+
+    rt-tests: incorrect first latency value for --verbose option
+    
+    When the --verbose option is selected, the first value for each thread is
+    incorrectly reported as zero.
+    
+    This is because when collecting the first value, the index into stat->values is
+    incremented from zero to one before storing the value.  But when printing the
+    values, the first value printed is stat->values[0], which has been initialized
+    to zero.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit f4256bfde48fa269758633d79e722d50a431b314
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Tue May 1 19:34:13 2012 -0700
+
+    rt-tests: Makefile get machinetype from compiler instead of uname
+    
+    Fix the machinetype check for cross-compiling.
+    
+    This has been tested on an x86_64  Fedora host for an x86_64 target and
+    an ARM target.  Additional testing would be greatly appreciated.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Darren Hart <dvhart@linux.intel.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 3c14034e3dfd23aea9e830e7aa7be5f1acaa8410
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Tue May 1 19:45:44 2012 -0700
+
+    rt-tests: cyclictest warn of interaction between '-a', '--smp', and '--numa'
+    
+    The '-a' option is always ignored if --smp or --numa is specified.  Fix the
+    warning message to not depend on --smp or --numa occuring first.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Darren Hart <dvhart@linux.intel.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit b3593fbe8e18bb441a37d869282574784aa49e0b
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Tue May 1 19:45:00 2012 -0700
+
+    rt-tests: cyclictest avoid unneeded warning
+    
+    Avoid annoying warning message when tracing is not requested and the debug
+    file system is not available.
+    
+    The same test already protects against calling event_enable_all().
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Reviewed-by: Darren Hart <dvhart@linux.intel.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 0629f60b79cd8958b0abd01611374c814354b0b1
+Author: Frank Rowand <frank.rowand@am.sony.com>
+Date:   Tue May 1 19:44:17 2012 -0700
+
+    rt-tests: cyclictest segfault with '-a'
+    
+    This fixes a segfault on ARM when the '-a' option is used.
+    
+    man sched_setaffinity says to use pthread_setaffinity_np() when using the
+    POSIX threads API.
+    
+    Signed-off-by: Frank Rowand <frank.rowand@am.sony.com>
+    Tested-by: Darren Hart <dvhart@linux.intel.com>
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit d5c8f73345ea4cb5791b9f399ed7793231f0c73b
+Merge: f2b344c e6bca75
+Author: Clark Williams <williams@redhat.com>
+Date:   Mon Mar 26 13:40:01 2012 -0500
+
+    Merge remote-tracking branch 'jkacur/rt-tests-0.83-devel' into work
+    
+    Conflicts:
+    	Makefile
+
+commit f2b344c958ecaba7d305fc7c78147333adc3bbc4
+Author: Clark Williams <williams@redhat.com>
+Date:   Mon Mar 26 13:36:55 2012 -0500
+
+    change cyclictest measurement thread to check returns and exit on error
+    
+    Start of an ongoing process to have error strategy where return is
+    checked and if error, exit with appropriate status.
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit c9870e6cbad0fbd8689e8b91b06e01c2f971bd82
+Author: Clark Williams <williams@redhat.com>
+Date:   Mon Mar 26 13:25:51 2012 -0500
+
+    report number of samples written in hwlatdetect
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit e6bca755b8afef7edf5acd3fde1effa8d6d7e595
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Mar 23 02:07:16 2012 +0100
+
+    install: Fix failed to create symbolic link hwlatdetect file exists
+    
+    The following build error can occur if you have done a previous make install
+    
+    if test -n "/usr/lib/python2.7/site-packages" ; then \
+    	install -D -m 755 src/hwlatdetect/hwlatdetect.py /usr/lib/python2.7/site-packages/hwlatdetect.py ; \
+    	ln -s /usr/lib/python2.7/site-packages/hwlatdetect.py "/usr/local/bin/hwlatdetect" ; \
+    fi
+    ln: failed to create symbolic link `/usr/local/bin/hwlatdetect': File exists
+    make: *** [install] Error 1
+    
+    I initially wanted to fix the error by removing the symbolic link, with rm -rf
+    but Andrew Burgess pointed out that you can just use the
+    ln's -f (force) flag. I like that solution better.
+    
+    Suggested-by: Andrew Burgess <aab@cichlid.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 95f284274540252a8ca6b1c58816f82aa956c0d0
+Author: Clark Williams <williams@redhat.com>
+Date:   Fri Mar 23 09:34:30 2012 -0500
+
+    Revert "cyclictest problem/bug as non-root"
+    
+    This reverts commit 64e635bc513a3a114729f86de7a87780b2737605.
+    moving to the check-return-and-exit strategy
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 192a3adcd407fd0f6928333de6d4dd947796410a
+Merge: 2819d68 3ff3300
+Author: Clark Williams <williams@redhat.com>
+Date:   Fri Mar 23 09:18:47 2012 -0500
+
+    Merge remote-tracking branch 'jkacur/rt-tests-0.83-devel' into work
+
+commit 3ff3300ba0dd4027ec64c0ef0c00585e681a55ea
+Author: John Kacur <jkacur@redhat.com>
+Date:   Fri Mar 23 02:07:16 2012 +0100
+
+    install: Fix failed to create symbolic link hwlatdetect file exists
+    
+    The following build error can occur if you have done a previous make install
+    
+    if test -n "/usr/lib/python2.7/site-packages" ; then \
+    	install -D -m 755 src/hwlatdetect/hwlatdetect.py /usr/lib/python2.7/site-packages/hwlatdetect.py ; \
+    	ln -s /usr/lib/python2.7/site-packages/hwlatdetect.py "/usr/local/bin/hwlatdetect" ; \
+    fi
+    ln: failed to create symbolic link `/usr/local/bin/hwlatdetect': File exists
+    make: *** [install] Error 1
+    
+    Fix the error by removing the symbolic link.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 6f2665250edf49194a4b383d0897050ee57c760d
+Author: John Kacur <jkacur@redhat.com>
+Date:   Thu Mar 22 01:19:40 2012 +0100
+
+    Move info, warn, and fatal functions to error.[ch]
+    
+    Move warning, error and fatal function to the error files.
+    This is a first step in cleaning up rt-tests.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit fb7ef61416b6b191a5186a715e51792847de883c
+Author: John Kacur <jkacur@redhat.com>
+Date:   Thu Mar 22 00:53:26 2012 +0100
+
+    Makefile: Introduce a static library
+    
+    Introduce a static libray.
+    Currently it contains the functions in rt-utils.c error.c and rt-get_cpu.c
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit d276bb4b2d75f847fc1719b8d42f12930ad3b2d2
+Author: Darren Hart <dvhart@linux.intel.com>
+Date:   Tue Mar 20 12:05:01 2012 -0700
+
+    Makefile: Support user supplied CFLAGS and LDFLAGS
+    
+    Accept user supplied CFLAGS and LDFLAGS, overwriting the
+    Makefile supplied versions. This can cause the build to
+    fail if the user does not provide at least what the Makefile
+    defines, but so be it.
+    
+    Signed-off-by: Darren Hart <dvhart@linux.intel.com>
+    CC: Clark Williams <williams@redhat.com>
+    CC: John Kacur <jkacur@redhat.com>
+    CC: Denys Dmytriyenko <denis@denix.org>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 9eef81de2f8a0b16e183070a1ff7d1580d650fb3
+Author: John Kacur <jkacur@redhat.com>
+Date:   Wed Mar 21 22:29:43 2012 +0100
+
+    pi_stress: Check the status of sched_getaffinity
+    
+    Check the status of sched_getaffinity and exit upon error.
+    
+    CPU_ISSET only checks whether a cpu is in a mask, and not whether the
+    mask is valid. Checking the status ensures we aren't working with garbage
+    values.
+    
+    This also removes the warning from gcc about the status variable being unused
+    as reported by Darren Hart.
+    
+    Reported-by: Darren Hart <dvhart@linux.intel.com>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit b52b383192e7a38e129ac0e10a361214721fcb83
+Author: Steven Rostedt <rostedt@goodmis.org>
+Date:   Wed Mar 21 13:06:43 2012 -0400
+
+    rt-tests: Update rt-migrate-test to use ftrace infrastructure
+    
+    The rt-migrate-test in the rt-tests is still using the old logdev
+    interface that requires the logdev patch. Ftrace has been introduced
+    into mainline Linux since 2.6.27 and has many more features than logdev.
+    The rt-migrate-test should interact with ftrace instead of logdev.
+    
+    Signed-off-by: Steven Rostedt <rostedt@goodmis.org>
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit d7cd65d54c33f7ce57310d8d4df6178dc250c2d1
+Author: John Kacur <jkacur@redhat.com>
+Date:   Tue Feb 14 01:47:25 2012 +0100
+
+    gitignore: differentiate between program names and directories
+    
+    Many rt-test programs including cyclictest have directories with the
+    same name as the generated binaries. Tell .gitignore to only ignore
+    the program names and not the directories by using a slash prefix.
+    
+    Signed-off-by: John Kacur <jkacur@redhat.com>
+
+commit 2819d683a31765c8f46e7e0a97cd6806516edc7a
+Merge: 1d632c3 64e635b
+Author: Clark Williams <williams@redhat.com>
+Date:   Mon Feb 13 12:37:49 2012 -0600
+
+    Merge branch 'master' into work
+
+commit 64e635bc513a3a114729f86de7a87780b2737605
+Author: Nicholas Mc Guire <der.herr@hofr.at>
+Date:   Fri Feb 10 12:57:21 2012 +0100
+
+    cyclictest problem/bug as non-root
+    
+    HI !
+    
+     minor bug in cyclictest but potential causing confusion on cyclictest
+     resuults when running as non-root user.
+    
+    Setup:
+     if one sets the rtprio in /etc/security/limits.conf to something below
+     prio max - like:
+    
+     @hofrat          hard    rtprio          10
+     @hofrat          soft    rtprio          10
+    
+     but then starts cylictest with -p 80 cyclictest will not fuss and also
+     display priority 80 (as it uses par->prio in print_stat) but effectively
+     runs with prio 0 as the return value of sched_setscheduler is not being
+     checked in timerthread), resulting in semingly bad scheduling jitter values.
+    
+     So maybe cyclictest should take the effective maximum schduling priority
+     of the user and not the scheduling policy maximum. Not sur if the check
+     in timerthread is actually really needed - but it should not hurt ither.
+     patch below (against current git) at "works for me" quality.
+    
+    thx!
+    hofrat
+
+commit 1d632c3bf9deefbff733509b4fd0cad8ce4fa782
+Merge: 15c6d81 4803d56
+Author: Clark Williams <williams@redhat.com>
+Date:   Thu Nov 10 22:53:02 2011 -0600
+
+    Merge https://github.com/flosse/rt-tests into work
+
+commit 15c6d81986b6b8efeaf3a5ddf37bf63ac8352dab
+Author: Clark Williams <williams@redhat.com>
+Date:   Thu Nov 10 22:50:37 2011 -0600
+
+    [cyclictest] added priority spreading option --priospread
+    
+    Add option to spread priorities across measurement threads in
+    decending order.
+    
+    Signed-off-by: Clark Williams <williams@redhat.com>
+
+commit 4803d56d394a7ad0f03d5bd515cd2c56f887dfce
+Author: Markus Kohlhase <mail@markus-kohlhase.de>
+Date:   Mon Oct 24 04:05:26 2011 +0200
+
+    added description from osadl.org
 
 commit 5f1e84f8b015df3ff950056494134eca3f640d70
 Author: Clark Williams <williams@redhat.com>
@@ -284,45 +1271,6 @@ Date:   Thu Sep 1 09:41:37 2011 -0500
     
     Signed-off-by: Clark Williams <williams@redhat.com>
 
-commit b1da9977f07c6c343c1fdb50c556cadfd5bcefd1
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Aug 26 09:26:00 2011 +0200
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 18ccf852431d2def44d9d994012299fc37493309
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Aug 26 09:24:54 2011 +0200
-
-    debian/copyright: update for 0.74
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit cd6e5800356414cee855788632a68fbc7e9a138e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Aug 20 15:01:38 2011 +0200
-
-    new patch fixing a build failure in the backfire kernel module
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 2601f579508879105272d882cd407aca0527f201
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Aug 20 15:01:12 2011 +0200
-
-    debian: Update to v0.74
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 579bae293907bc8ed4e9036e0594e44d4e77b709
-Merge: 23305f2 3e55619
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Aug 20 14:49:25 2011 +0200
-
-    Merge tag 'v0.74' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit 3e55619c86c2604638c06c31c87881084f643274
 Author: Clark Williams <williams@redhat.com>
 Date:   Thu Aug 18 09:15:57 2011 -0500
@@ -377,92 +1325,6 @@ Date:   Tue Aug 9 11:27:12 2011 -0500
 
     Merge remote-tracking branch 'jkacur/rt-tests-dev-new' into work
 
-commit 23305f2d44021c5d75d975376b2493f1263efe2d
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun Jul 17 12:40:34 2011 +0200
-
-    bump backfire version
-    
-    This fixes dkms to find the source files again.
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 49550bfb9253a2727150eb63dba66654d6993220
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jul 13 23:09:53 2011 +0200
-
-    add a README describing how to allow changing scheduler policy for users
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit afeacfcb19f285000885d6c0379bc14c2f5afa31
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jul 13 22:57:52 2011 +0200
-
-    new patch: Don't reference non-standard realtime group
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 7f41b08501ebd418490d51c9a22a7bd31324caaa
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun Jun 26 23:17:58 2011 +0200
-
-    debian/control: bump Standards-Version to 3.9.2
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 1642450645002852221c3922f36f128caa73329a
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 24 22:38:49 2011 +0200
-
-    new patch fixing a harmless build warning by dpkg-shlibdeps
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 862bf8f25249d0613d94e92b428e36fa6a5f74ec
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 24 22:28:17 2011 +0200
-
-    switch to debhelper compatibility level 8
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 5d8a06a9b01e4f61e4475e1f4eab9cafb2e4a9e9
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 24 22:27:02 2011 +0200
-
-    debian/rules: provide sequence as first parameter to dh
-    
-    This is needed for debhelper compatibility level 8.
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit aeb5e158b9d0fce997a22c12aa832160d2362a63
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 24 22:07:20 2011 +0200
-
-    new patch providing a man page for pip_stress
-    
-    This fixes the following lintian warning:
-    	W: rt-tests: binary-without-manpage usr/bin/pip_stress
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 441103986b6f40d0304824dd5f4183b0af43cb6c
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 24 20:32:43 2011 +0200
-
-    debian/rules: add build-{arch,indep} targets
-    
-    This fixes the following warnings from lintian:
-    	W: rt-tests source: debian-rules-missing-recommended-target build-arch
-    	W: rt-tests source: debian-rules-missing-recommended-target build-indep
-    
-    Debhelper 8.1.0 is the first version supporting the corresponding
-    sequences, so bump Build-Depends.
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
 commit f26dbd8adcc7f9888d06a4963e8fe9e1ca497a15
 Author: John Kacur <jkacur@redhat.com>
 Date:   Fri May 13 12:52:48 2011 +0200
@@ -472,25 +1334,6 @@ Date:   Fri May 13 12:52:48 2011 +0200
     2. Spelling clean-ups.
     
     Signed-off-by: John Kacur <jkacur@redhat.com>
-
-commit e036ae96aca731e39f273adf4dfbe7a6f4fb3007
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri May 13 12:22:11 2011 +0200
-
-    refresh patches for new upstream release
-    
-     - drop modernize_backfire_Makefile and install_backfire_Makefile
-       (applied upstream)
-     - refresh install_hwlatdetect_into_sbindir and kernvar_fix_possible_buffer_overflow
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 65feb142a77786d897d9f5d1f3113b595d23d66a
-Merge: 5c7b8e0 81da016
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri May 13 11:58:07 2011 +0200
-
-    Merge tag 'v0.73' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
 
 commit cea67f47fae1e11579ab6a96d105f9b30360f0db
 Author: Clark Williams <williams@redhat.com>
@@ -591,66 +1434,6 @@ Date:   Wed May 4 15:04:41 2011 -0500
     
     Signed-off-by: Clark Williams <williams@redhat.com>
 
-commit 5c7b8e08af9f14d3cf6e920656c28710ed15d15c
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Mar 30 10:38:26 2011 +0200
-
-    debian/backfire-dkms: add BUILT_MODULE_NAME[0] to fix warning
-    
-    Before this change $(dkms status) issued:
-    
-    	dkms.conf: Error! No 'BUILT_MODULE_NAME' directive specified for record #0.
-    	backfire, 0.71-1, 2.6.32-5-amd64, x86_64: installed  (WARNING! Missing some built modules!)
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 4f0f0c1cf2bb94879eaec31acb935d7f2b1c2a52
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun Mar 20 16:32:17 2011 +0100
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 580f1fac8c14cbbe4b452ce79fc90fe55721564b
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun Mar 20 16:31:00 2011 +0100
-
-    debian/control: bump Standards-Version to 3.9.1
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit a92d5d67c0528ebbd540a2d4d6d6fb0b34351570
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 18 17:39:38 2011 +0100
-
-    debian/control: use Architecture: linux-any
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit b7447aee585390ce49670ccfe1416d1620636048
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 18 17:07:44 2011 +0100
-
-    update debian/changelog for new upstream release
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 4e3759b80102f0ea619f7dcda1ef8e9b95a88c97
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 18 17:04:55 2011 +0100
-
-    new patch: kernvar() fix possible buffer overflow
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit ea00cb53cc8ab0bd158dca4fa5f7c8968b34f244
-Merge: 6668388 886d268
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 18 16:52:54 2011 +0100
-
-    Merge tag 'v0.72' of git://git.us.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit a5693cc7854fbb5a60931407440a53f2efd81dc1
 Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 Date:   Thu Jul 1 06:32:00 2010 +0200
@@ -704,72 +1487,6 @@ Date:   Mon Jun 14 14:50:02 2010 -0500
     the --smp and --numa modes (-S and -U).
     
     Signed-off-by: Clark Williams <williams@redhat.com>
-
-commit 66683887d15b0846ef4fa37f0d95306194bd64f3
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun Jun 13 07:23:31 2010 +0200
-
-    Add more linux ports to Architecture
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit f02e3a55feb2f6996b47267793054632b1facab7
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jun 2 22:15:07 2010 +0200
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 1f85036c96cd08bc3c84bda9a7c9afd2f14b11ed
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Tue Jun 8 21:25:26 2010 +0200
-
-    add backfire package with dkms support
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit b77ce428e47b1a0f25b2178237c820b0e19637fc
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri May 28 22:09:01 2010 +0200
-
-    add powerpcspe to architecture list
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit c7fa4bedf596fbe6681604e6af278545b4e042be
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri May 28 21:58:20 2010 +0200
-
-    new patch: modernize backfire Makefile
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit f9e3d3a6c538a74f88c2e3ed7518b525b7bf97f0
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri May 28 21:48:44 2010 +0200
-
-    update debian/c{opyright,ontrol,hangelog} for new upstream release
-    
-    The copyright of hackbench is specified as found in ltp and confimed by
-    Ingo Molnar.
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit f2e3d6ee2a9810015dc170b65ba6661a185c3303
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed May 26 12:18:04 2010 +0200
-
-    drop patches applied by upstream, refresh remaining patch
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 9dcdf50f0ab3639847e7f10019b38c6dd45688b7
-Merge: ffc1d5c 9a0525c
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed May 26 11:41:34 2010 +0200
-
-    Merge tag 'v0.71' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
 
 commit 9a0525c5b124cb7cd2e39f5c03ce488caa63c3df
 Author: Clark Williams <williams@redhat.com>
@@ -1121,22 +1838,6 @@ Date:   Mon Mar 8 01:06:29 2010 +0100
     
     Signed-off-by: John Kacur <jkacur@redhat.com>
 
-commit ffc1d5ca0c178f864c9ea104c81d5cb318a746bf
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Mar 1 17:02:31 2010 +0100
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit e0aa15c8327a2045ada5ed2d5c288158129ebfdf
-Author: Alexander Reichle-Schmehl <tolimar@debian.org>
-Date:   Tue Mar 2 11:02:11 2010 +0100
-
-    Urgency high due to rc bug fix
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
 commit 6214410e57d8be054ee58ecdc53cbc4803a3627b
 Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 Date:   Mon Mar 1 17:51:15 2010 +0100
@@ -1187,15 +1888,6 @@ Date:   Wed Feb 24 17:58:06 2010 +0100
     trivial: s/specifed/specified/
     
     Acked-by: John Kacur <jkacur@redhat.com>
-
-commit bc751a3703dc77f067c4ae61699e89bcbb54054a
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Mar 1 16:52:16 2010 +0100
-
-    new patch: rename pip to pip_stress
-    
-    Closes: http://bugs.debian.org/572104
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
 commit 4dec55015c7fa642e960af084376af09c33b7068
 Author: Clark Williams <williams@redhat.com>
@@ -1496,22 +2188,6 @@ Date:   Mon Feb 22 21:56:49 2010 +0100
     
     Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
-commit 3732e3e1d0b329ce54f3a7f80b33b0f8872efdf5
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Feb 22 15:35:08 2010 +0100
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 881bbe9414e620d80eb0e7c95b36fda1baf698c4
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 19 12:36:10 2010 +0100
-
-    move hwlatdetect to sbindir, not bindir
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
 commit fae4312eb2d4cc9022d74053a451b666917c132b
 Author: Clark Williams <williams@redhat.com>
 Date:   Fri Feb 19 09:52:50 2010 -0600
@@ -1519,45 +2195,6 @@ Date:   Fri Feb 19 09:52:50 2010 -0600
     added hackbench to specfile
     
     Signed-off-by: Clark Williams <williams@redhat.com>
-
-commit 6292f80866a8e08314befefb4160b682408fedfc
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 19 11:51:06 2010 +0100
-
-    new patch: install install backfire.c to $(srcdir)/backfire/
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 8c1f73e365870d00556b9fb0bf56865067c62631
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 19 11:48:39 2010 +0100
-
-    new patch: install hwlatdetect directly into $bindir
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 86c5135b042ba8771a0793fddd07b3b2d732e070
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Feb 18 21:48:25 2010 +0100
-
-    Add a build script and a hint to it in README.source
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 1d3ebb0e3b7969512e3b94cffa43c0d8afbbad40
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Feb 19 10:53:05 2010 +0100
-
-    depend on debhelper (>= 7.4.15) because of #570443
-    
-    Debhelper between 7.4.11 and 7.4.15 closed stderr for make resulting in
-    a dying sed and so leaving temporary files in the working copy.  These
-    make dpkg-source create a new and unwanted patch
-    debian/patches/debian-changes-0.66-1.
-    
-    See http://bugs.debian.org/570443 for the exact details.
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
 commit 69ef7d4835a6d196826ac24ddeb1f86ef9602971
 Author: Clark Williams <williams@redhat.com>
@@ -1629,63 +2266,6 @@ Date:   Wed Feb 17 19:08:44 2010 +0100
     Imported hackbench from rteval-1.18 (rteval-loads-1.0.1)
     
     Signed-off-by: David Sommerseth <davids@redhat.com>
-
-commit c700dc946940df9d95fd90ae00a23fa73f3137b2
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Feb 17 10:10:36 2010 +0100
-
-    depend on libnuma1 (>= 2.0.3) explicitly
-    
-    see http://bugs.debian.org/570201 for details
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 271002573f1e186bf3fca571c388d3912be9ac7e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Feb 17 10:04:27 2010 +0100
-
-    build with libnuma on platforms that have it
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit f9505b39f421196ccdd2d12f7ebd5210e5d3b6f4
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Feb 17 10:03:28 2010 +0100
-
-    switch to dpkg-source 3.0 (quilt) format
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 5b1ad52759e799cd6a883a2c19076a97fcfd0116
-Author: Uwe Kleine-König <ukleinek@cepheus.tralala>
-Date:   Tue Feb 16 21:54:49 2010 +0100
-
-    debian/control: bump Standards-Version to 3.8.4
-    
-    Signed-off-by: Uwe Kleine-König <ukleinek@cepheus.tralala>
-
-commit 08f184a6b78dbc3879a6cb4eb5ef90bfa1dc39f6
-Author: Uwe Kleine-König <ukleinek@cepheus.tralala>
-Date:   Tue Feb 16 21:38:35 2010 +0100
-
-    debian/copyright: update for 0.66
-    
-    Signed-off-by: Uwe Kleine-König <ukleinek@cepheus.tralala>
-
-commit b265f4b751fb6b45e29540c64854fca83de08ba7
-Author: Uwe Kleine-König <ukleinek@cepheus.tralala>
-Date:   Tue Feb 16 21:02:34 2010 +0100
-
-    document new upstream release in changelog
-    
-    Signed-off-by: Uwe Kleine-König <ukleinek@cepheus.tralala>
-
-commit 9eac09c586fac2e7c1ae8a6c3fd551c47d28b586
-Merge: a0904a7 73d48f4
-Author: Uwe Kleine-König <ukleinek@cepheus.tralala>
-Date:   Tue Feb 16 21:00:04 2010 +0100
-
-    Merge tag 'v0.66' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
 
 commit 73d48f4e04684a376b41525bfed030b7671f03f7
 Author: Clark Williams <williams@redhat.com>
@@ -2738,68 +3318,6 @@ Date:   Mon Nov 16 15:37:49 2009 +0100
     
     Signed-off-by: John Kacur <jkacur@redhat.com>
 
-commit a0904a7dfcfcca40299cae7453cf4bde29b8956e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Tue Nov 10 15:40:16 2009 +0100
-
-    add sh4 to architecture list
-    
-    Requested-by: Nobuhiro Iwamatsu <iwamatsu@nigauri.org>
-    Closes: http://bugs.debian.org/555554
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 2f181d013caf02bbbbf020f7f1e40e85cfe1a81a
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Oct 29 21:50:29 2009 +0100
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 56e539b50e9645645b470eba0e210ea176a6bbb1
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Oct 29 21:35:34 2009 +0100
-
-    copyright: add rt-migrate-test
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 134464f980b50783485c170276f606663d7afb3f
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Oct 29 21:28:10 2009 +0100
-
-    only build on architectures that didn't FTBFS for 0.51-1
-    
-    These are all Linux archs but hppa.  (The latter failed with
-    
-    	cc -Wall -Wno-nonnull -O2 -D_GNU_SOURCE -D VERSION_STRING=\"0.51\" src/pi_tests/classic_pi.c -o classic_pi -lpthread -lrt
-    	src/pi_tests/classic_pi.c: In function 'main':
-    	src/pi_tests/classic_pi.c:231: warning: implicit declaration of function 'pthread_mutexattr_setprotocol'
-    	src/pi_tests/classic_pi.c:232: error: 'PTHREAD_PRIO_INHERIT' undeclared (first use in this function)
-    	src/pi_tests/classic_pi.c:232: error: (Each undeclared identifier is reported only once
-    	src/pi_tests/classic_pi.c:232: error: for each function it appears in.)
-    	src/pi_tests/classic_pi.c: In function 'setup_thread_attr':
-    	src/pi_tests/classic_pi.c:365: warning: implicit declaration of function 'pthread_attr_setaffinity_np'
-    
-    .)
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 52c471277d6636654b8e1668ea68001fec120c2b
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Oct 29 21:23:55 2009 +0100
-
-    document new upstream release in changelog
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 734c148ced9b943519f5d6d2acac9bf2d7ca737b
-Merge: 29794b2 82ca52c
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Oct 29 21:21:23 2009 +0100
-
-    Merge tag 'v0.53' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit d0a65eb5a016d789edcc50ea7f94506cf6751730
 Author: Clark Williams <williams@redhat.com>
 Date:   Wed Oct 7 09:14:20 2009 -0500
@@ -2842,61 +3360,6 @@ Author: Clark Williams <williams@redhat.com>
 Date:   Mon Sep 21 10:30:10 2009 -0500
 
     added Steven Rostedt's rt-migrate-test
-
-commit 29794b26513f13d376c21f97dc18496f3258b58d
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:29:51 2009 +0200
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit e9445e98f840b6f902fd8a31d8a26fbb0129fb0f
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:25:10 2009 +0200
-
-    Bump Standards-Version
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit eff0ebaf1ad5eec520dd01b03ebeae3e6dd9c383
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:18:47 2009 +0200
-
-    debian/copyright: add scripts/*
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 68dae8d01aa39b7cfdda2c80842fcbb62ec16894
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:15:09 2009 +0200
-
-    debian/changelog: document new upstream release
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 8715d785632e4047d30f91e4af2ccb9852b3095d
-Merge: 80d5204 42ab9e7
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:00:42 2009 +0200
-
-    Merge tag 'v0.51' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
-commit 80d5204174d0f02349d49c26294d5931ddfdcb29
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sat Sep 19 16:00:17 2009 +0200
-
-    reformat copyright and add authors and years of the copyright
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 0e59a31bf8882390803a95539ec773c66d8fe14e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu Sep 17 09:49:28 2009 +0200
-
-    copyright: fix a typo
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
 commit 16707573007db383859cd551c2415afb13be9739
 Author: John Kacur <jkacur@redhat.com>
@@ -2965,21 +3428,6 @@ Date:   Wed Aug 26 17:31:34 2009 -0300
     only update the status when a new max is hit.
     
     Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
-
-commit 6fc3749d5839de2a0592e2dba1b57db6e7e424e9
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jul 20 21:53:31 2009 +0200
-
-    document new upstream release in changelog
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 8356fae7f2b65993bf73fa436337a8cb141304b1
-Merge: 3e9a9e2 a55242c
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jul 20 21:49:26 2009 +0200
-
-    Merge tag 'v0.50' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
 
 commit 3eba62854f39c2e107ecfc8673b88fcd9b04f7a6
 Author: Clark Williams <williams@redhat.com>
@@ -3062,12 +3510,6 @@ Date:   Mon Jul 13 09:40:46 2009 -0500
     
     Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
     Signed-off-by: Clark Williams <williams@redhat.com>
-
-commit 3e9a9e2ec3b6b65f94b9c8a646c0748736c7981e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jul 8 22:05:47 2009 +0200
-
-    set distribution=unstable for upload to Debian
 
 commit 2ba1f87e05d59287fd09520f4a20d990411888e6
 Author: Clark Williams <williams@redhat.com>
@@ -3247,21 +3689,6 @@ Date:   Sun Jul 5 12:57:27 2009 -0500
 
     changed smidetect to hwlatdetect in .gitignore
 
-commit 845d666e514b19f32d104c84ccea3f8bf470a07d
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jul 3 15:06:55 2009 +0200
-
-    update changelog for v0.45
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit bb44243771a4c85273b0f9830e07729921cefb48
-Merge: 4c7db63 190a00e
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jul 3 15:05:06 2009 +0200
-
-    Merge tag 'v0.45' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit 802855c693684fb56ee40af72f6dcffe4a5796c8
 Author: Clark Williams <williams@redhat.com>
 Date:   Thu Jul 2 17:13:39 2009 -0500
@@ -3360,29 +3787,6 @@ Date:   Tue Jun 30 13:36:06 2009 -0500
 
     added code to resize window/width when setting the other to a smaller value
 
-commit 4c7db63361902d19f591d5dfab734a5cf1892b45
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Tue Jun 30 10:21:38 2009 +0200
-
-    bump Standards-Version
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit c62677c79218fe71fe5dbec1e5aee14b30426260
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jun 29 21:47:30 2009 +0200
-
-    changes for 0.43-1
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit fba5113157bb8fed6639fd3ab54d898e3c7301ad
-Merge: 8513914 803a417
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jun 29 21:46:26 2009 +0200
-
-    Merge tag 'v0.43' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit 803a41737827db85a89b8ae3822c3a1c7b64916b
 Author: Clark Williams <williams@redhat.com>
 Date:   Thu Jun 25 09:15:40 2009 -0500
@@ -3402,45 +3806,6 @@ Date:   Wed Jun 24 00:21:08 2009 +0200
     
     Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
-commit 851391404787a1efa571beb149e06c718d472edb
-Merge: 31e7520 a3904bd
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jun 22 22:50:52 2009 +0200
-
-    Merge branch 'master-v0.39'
-    
-    Conflicts:
-    	debian/changelog
-    	debian/control
-
-commit a3904bdcb45949ee31b6dfe0b3dfb70acb9206e2
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon Jun 22 21:22:47 2009 +0200
-
-    set distribution=unstable for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 61f89f1a67a060bbf58146cd29bb16b54308e737
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jun 10 21:01:38 2009 +0200
-
-    conflict with xenomai-runtime
-    
-    This closes http://bugs.debian.org/529783
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-    (cherry picked from commit 79861689a3c625629f71b15bbecbbfa26c5a76af)
-
-commit f34d25cf1e84b4549eb2777c41d1308a1fca8a4f
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jun 10 19:33:28 2009 +0200
-
-    describe Changelog problem when building from the git repo
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-    (cherry picked from commit f662b20f8d9f8ad8334ee061642804e082396ac7)
-
 commit 219d5b48b1725a145f1973d61bf31db1c168dea4
 Author: Clark Williams <williams@redhat.com>
 Date:   Fri Jun 12 15:48:18 2009 -0500
@@ -3458,13 +3823,6 @@ Author: Clark Williams <williams@redhat.com>
 Date:   Fri Jun 12 15:47:35 2009 -0500
 
     updated hwlatdetect.8 to reflect new options/behavior
-
-commit 31e7520d6021a2c8251f7111a70dbcbe246b08b8
-Merge: 7986168 3e04327
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Fri Jun 12 21:56:52 2009 +0200
-
-    Merge tag 'v0.41' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
 
 commit 3e04327f7fc0be0ee2cb3d8157a4faf43e4b00cb
 Merge: c7deee8 11f68bd
@@ -3504,16 +3862,6 @@ Date:   Wed Jun 10 23:32:41 2009 -0500
 
     handled module changes
 
-commit 79861689a3c625629f71b15bbecbbfa26c5a76af
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jun 10 21:01:38 2009 +0200
-
-    conflict with xenomai-runtime
-    
-    This closes http://bugs.debian.org/529783
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
 commit 77dc91b0669256056b9b0605bae66968e7070e3d
 Author: Clark Williams <williams@redhat.com>
 Date:   Wed Jun 10 13:53:18 2009 -0500
@@ -3525,14 +3873,6 @@ Author: Clark Williams <williams@redhat.com>
 Date:   Wed Jun 10 13:50:02 2009 -0500
 
     the great renaming: smidetect -> hwlat
-
-commit f662b20f8d9f8ad8334ee061642804e082396ac7
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Wed Jun 10 19:33:28 2009 +0200
-
-    describe Changelog problem when building from the git repo
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
 commit 7bb717b666059e1846f0fee55819f09c17a9d521
 Author: Clark Williams <williams@redhat.com>
@@ -3576,19 +3916,6 @@ Date:   Thu May 14 01:06:38 2009 +0200
     
     Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
-commit b23e8c2de03e6da28377d6a6cc2609a3a0f4da16
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu May 14 01:05:35 2009 +0200
-
-    changes for 0.40
-
-commit cf3e574ddaf4ed22296239bc2a790440f7f9456a
-Merge: 7db0cb0 5aac188
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Thu May 14 00:09:51 2009 +0200
-
-    Merge tag 'v0.40' of git://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests
-
 commit 5aac188d853c78f483342255303086992a533b64
 Author: Clark Williams <williams@redhat.com>
 Date:   Wed May 13 13:57:11 2009 -0500
@@ -3618,30 +3945,6 @@ Author: Clark Williams <williams@redhat.com>
 Date:   Tue May 12 16:53:59 2009 -0500
 
     initial checkin
-
-commit 7db0cb0788c74bb759082f42f20ae654a4f5d785
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Mon May 11 00:19:41 2009 +0200
-
-    add VCS URL to control
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 2690bd54c3b61961f72f636bc087846e893c4904
-Author: Alexander Reichle-Schmehl <a.reichle-schmehl@pengutronix.de>
-Date:   Sun May 10 23:46:58 2009 +0200
-
-    change debian revision for upload to Debian
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-
-commit 46c6ec68da66fcd583e2a88ab0e69c671051926f
-Author: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
-Date:   Sun May 10 23:17:27 2009 +0200
-
-    initial debianization
-    
-    Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 
 commit 9153c383ec7f7b08fd7d50f35d39a1a6c933b579
 Author: Clark Williams <williams@redhat.com>

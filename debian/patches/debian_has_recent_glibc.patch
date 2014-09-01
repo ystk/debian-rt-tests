@@ -10,46 +10,32 @@ This fixes a (harmless) build warning
 Forwarded: not-needed
 Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
 ---
- Makefile                 |   11 +++++------
+ Makefile                 |    5 ++---
  src/include/rt-get_cpu.h |   19 +------------------
  src/lib/rt-get_cpu.c     |   27 ---------------------------
- 3 files changed, 6 insertions(+), 51 deletions(-)
+ 3 files changed, 3 insertions(+), 48 deletions(-)
 
 --- a/Makefile
 +++ b/Makefile
 @@ -7,7 +7,6 @@
  TARGETS = $(sources:.c=)
  
- LIBS 	= -lrt -lpthread
+ LIBS 	= -lrt -lpthread -lrttest -L.
 -EXTRA_LIBS ?= -ldl	# for get_cpu
  DESTDIR	?=
  prefix  ?= /usr/local
  bindir  ?= $(prefix)/bin
-@@ -75,19 +74,19 @@
- rt-migrate-test: rt-migrate-test.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+@@ -97,8 +96,8 @@
+ hackbench: hackbench.o
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
  
--ptsematest: ptsematest.o rt-utils.o rt-get_cpu.o
-+ptsematest: ptsematest.o rt-utils.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS) $(EXTRA_LIBS)
+-librttest.a: rt-utils.o error.o rt-get_cpu.o
+-	$(AR) rcs librttest.a rt-utils.o error.o rt-get_cpu.o
++librttest.a: rt-utils.o error.o
++	$(AR) rcs librttest.a rt-utils.o error.o
  
--sigwaittest: sigwaittest.o rt-utils.o rt-get_cpu.o
-+sigwaittest: sigwaittest.o rt-utils.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS) $(EXTRA_LIBS)
- 
--svsematest: svsematest.o rt-utils.o rt-get_cpu.o
-+svsematest: svsematest.o rt-utils.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS) $(EXTRA_LIBS)
- 
--pmqtest: pmqtest.o rt-utils.o rt-get_cpu.o
-+pmqtest: pmqtest.o rt-utils.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS) $(EXTRA_LIBS)
- 
--sendme: sendme.o rt-utils.o rt-get_cpu.o
-+sendme: sendme.o rt-utils.o
- 	$(CC) $(CFLAGS) -o $@ $^ $(LIBS) $(EXTRA_LIBS)
- 
- pip_stress: pip_stress.o error.o rt-utils.o
+ CLEANUP  = $(TARGETS) *.o .depend *.*~ *.orig *.rej rt-tests.spec *.d *.a
+ CLEANUP += $(if $(wildcard .git), ChangeLog)
 --- a/src/include/rt-get_cpu.h
 +++ b/src/include/rt-get_cpu.h
 @@ -19,27 +19,10 @@
