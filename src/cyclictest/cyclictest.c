@@ -1,7 +1,9 @@
 /*
  * High resolution timer test software
  *
- * (C) 2008-2011 Clark Williams <williams@redhat.com>
+ * (C) 2013      Clark Williams <williams@redhat.com>
+ * (C) 2013      John Kacur <jkacur@redhat.com>
+ * (C) 2008-2012 Clark Williams <williams@redhat.com>
  * (C) 2005-2007 Thomas Gleixner <tglx@linutronix.de>
  *
  * This program is free software; you can redistribute it and/or
@@ -31,6 +33,7 @@
 #include <sys/sysinfo.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include <sys/utsname.h>
 #include <sys/mman.h>
 #include "rt_numa.h"
@@ -59,7 +62,7 @@
 #define CPUCLOCK_SCHED          2
 
 static int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *req,
-		struct timespec *rem)
+			   struct timespec *rem)
 {
 	if (clock_id == CLOCK_THREAD_CPUTIME_ID)
 		return -EINVAL;
@@ -70,7 +73,7 @@ static int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec 
 }
 
 int sched_setaffinity (__pid_t __pid, size_t __cpusetsize,
-                              __const cpu_set_t *__cpuset)
+		       __const cpu_set_t *__cpuset)
 {
 	return -EINVAL;
 }
@@ -108,6 +111,8 @@ extern int clock_nanosleep(clockid_t __clock_id, int __flags,
 
 int enable_events;
 
+static char *policyname(int policy);
+
 enum {
 	NOTRACE,
 	CTXTSWITCH,
@@ -135,6 +140,7 @@ struct thread_param {
 	unsigned long interval;
 	int cpu;
 	int node;
+	int tnum;
 };
 
 /* Struct for statistics */
@@ -147,6 +153,7 @@ struct thread_stat {
 	double avg;
 	long *values;
 	long *hist_array;
+	long *outliers;
 	pthread_t thread;
 	int threadstarted;
 	int tid;
@@ -154,10 +161,12 @@ struct thread_stat {
 	long redmax;
 	long cycleofmax;
 	long hist_overflow;
+	long num_outliers;
 };
 
 static int shutdown;
 static int tracelimit = 0;
+static int notrace = 0;
 static int ftrace = 0;
 static int kernelversion;
 static int verbose = 0;
@@ -170,6 +179,13 @@ static int duration = 0;
 static int use_nsecs = 0;
 static int refresh_on_max;
 static int force_sched_other;
+static int priospread = 0;
+static int check_clock_resolution;
+static int ct_debug;
+static int use_fifo = 0;
+static pthread_t fifo_threadid;
+static int aligned = 0;
+static int offset = 0;
 
 static pthread_cond_t refresh_on_max_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t refresh_on_max_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -177,6 +193,10 @@ static pthread_mutex_t refresh_on_max_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t break_thread_id_lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t break_thread_id = 0;
 static uint64_t break_thread_value = 0;
+
+static pthread_barrier_t align_barr;
+static pthread_barrier_t globalt_barr;
+static struct timespec globalt;
 
 /* Backup of kernel variables that we modify */
 static struct kvars {
@@ -187,21 +207,27 @@ static struct kvars {
 static char *procfileprefix = "/proc/sys/kernel/";
 static char *fileprefix;
 static char tracer[MAX_PATH];
+static char fifopath[MAX_PATH];
 static char **traceptr;
 static int traceopt_count;
 static int traceopt_size;
+
+static struct thread_param **parameters;
+static struct thread_stat **statistics;
+
+static void print_stat(FILE *fp, struct thread_param *par, int index, int verbose, int quiet);
 
 static int latency_target_fd = -1;
 static int32_t latency_target_value = 0;
 
 /* Latency trick
  * if the file /dev/cpu_dma_latency exists,
- * open it and write a zero into it. This will tell 
- * the power management system not to transition to 
+ * open it and write a zero into it. This will tell
+ * the power management system not to transition to
  * a high cstate (in fact, the system acts like idle=poll)
  * When the fd to /dev/cpu_dma_latency is closed, the behavior
  * goes back to the system default.
- * 
+ *
  * Documentation/power/pm_qos_interface.txt
  */
 static void set_latency_target(void)
@@ -241,6 +267,7 @@ static char functiontracer[MAX_PATH];
 static char traceroptions[MAX_PATH];
 
 static int trace_fd     = -1;
+static int tracemark_fd = -1;
 
 static int kernvar(int mode, const char *name, char *value, size_t sizeofvalue)
 {
@@ -370,13 +397,35 @@ static int trace_file_exists(char *name)
 	return stat(path, &sbuf) ? 0 : 1;
 }
 
+#define TRACEBUFSIZ 1024
+static __thread char tracebuf[TRACEBUFSIZ];
+
+static void tracemark(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void tracemark(char *fmt, ...)
+{
+	va_list ap;
+	int len;
+
+	/* bail out if we're not tracing */
+	/* or if the kernel doesn't support trace_mark */
+	if (tracemark_fd < 0)
+		return;
+
+	va_start(ap, fmt);
+	len = vsnprintf(tracebuf, TRACEBUFSIZ, fmt, ap);
+	va_end(ap);
+	write(tracemark_fd, tracebuf, len);
+}
+
+
+
 void tracing(int on)
 {
 	if (on) {
 		switch (kernelversion) {
 		case KV_26_LT18: gettimeofday(0,(struct timezone *)1); break;
 		case KV_26_LT24: prctl(0, 1); break;
-		case KV_26_33: 
+		case KV_26_33:
 		case KV_30:
 			write(trace_fd, "1", 1);
 			break;
@@ -386,7 +435,7 @@ void tracing(int on)
 		switch (kernelversion) {
 		case KV_26_LT18: gettimeofday(0,0); break;
 		case KV_26_LT24: prctl(0, 0); break;
-		case KV_26_33: 
+		case KV_26_33:
 		case KV_30:
 			write(trace_fd, "0", 1);
 			break;
@@ -406,7 +455,7 @@ static int settracer(char *tracer)
 
 static void setup_tracer(void)
 {
-	if (!tracelimit)
+	if (!tracelimit || notrace)
 		return;
 
 	if (mount_debugfs(NULL))
@@ -474,12 +523,12 @@ static void setup_tracer(void)
 				ret = event_enable("sched/sched_switch");
 			}
 			break;
-               case WAKEUP:
-                       ret = settracer("wakeup");
-                       break;
-               case WAKEUPRT:
-                       ret = settracer("wakeup_rt");
-                       break;
+		case WAKEUP:
+			ret = settracer("wakeup");
+			break;
+		case WAKEUPRT:
+			ret = settracer("wakeup_rt");
+			break;
 		default:
 			if (strlen(tracer)) {
 				ret = settracer(tracer);
@@ -532,6 +581,14 @@ static void setup_tracer(void)
 				fatal("unable to open %s for tracing", path);
 		}
 
+		/* open the tracemark file descriptor */
+		if (tracemark_fd == -1) {
+			char path[MAX_PATH];
+			strcat(strcpy(path, fileprefix), "trace_marker");
+			if ((tracemark_fd = open(path, O_WRONLY)) == -1)
+				warn("unable to open trace_marker file: %s\n", path);
+		}
+
 	} else {
 		setkernvar("trace_all_cpus", "1");
 		setkernvar("trace_freerunning", "1");
@@ -558,8 +615,7 @@ static void setup_tracer(void)
  *
  * the return value is a value in seconds
  */
-int
-parse_time_string(char *val)
+int parse_time_string(char *val)
 {
 	char *end;
 	int t = strtol(val, &end, 10);
@@ -583,6 +639,79 @@ parse_time_string(char *val)
 		}
 	}
 	return t;
+}
+
+/*
+ * Raise the soft priority limit up to prio, if that is less than or equal
+ * to the hard limit
+ * if a call fails, return the error
+ * if successful return 0
+ * if fails, return -1
+*/
+static int raise_soft_prio(int policy, const struct sched_param *param)
+{
+	int err;
+	int policy_max;	/* max for scheduling policy such as SCHED_FIFO */
+	int soft_max;
+	int hard_max;
+	int prio;
+	struct rlimit rlim;
+
+	prio = param->sched_priority;
+
+	policy_max = sched_get_priority_max(policy);
+	if (policy_max == -1) {
+		err = errno;
+		err_msg("WARN: no such policy\n");
+		return err;
+	}
+
+	err = getrlimit(RLIMIT_RTPRIO, &rlim);
+	if (err) {
+		err = errno;
+		err_msg_n(err, "WARN: getrlimit failed\n");
+		return err;
+	}
+
+	soft_max = (rlim.rlim_cur == RLIM_INFINITY) ? policy_max : rlim.rlim_cur;
+	hard_max = (rlim.rlim_max == RLIM_INFINITY) ? policy_max : rlim.rlim_max;
+
+	if (prio > soft_max && prio <= hard_max) {
+		rlim.rlim_cur = prio;
+		err = setrlimit(RLIMIT_RTPRIO, &rlim);
+		if (err) {
+			err = errno;
+			err_msg_n(err, "WARN: setrlimit failed\n");
+			/* return err; */
+		}
+	} else {
+		err = -1;
+	}
+
+	return err;
+}
+
+/*
+ * Check the error status of sched_setscheduler
+ * If an error can be corrected by raising the soft limit priority to
+ * a priority less than or equal to the hard limit, then do so.
+ */
+static int setscheduler(pid_t pid, int policy, const struct sched_param *param)
+{
+	int err = 0;
+
+try_again:
+	err = sched_setscheduler(pid, policy, param);
+	if (err) {
+		err = errno;
+		if (err == EPERM) {
+			int err1;
+			err1 = raise_soft_prio(policy, param);
+			if (!err1) goto try_again;
+		}
+	}
+
+	return err;
 }
 
 /*
@@ -610,6 +739,7 @@ void *timerthread(void *param)
 	struct thread_stat *stat = par->stats;
 	int stopped = 0;
 	cpu_set_t mask;
+	pthread_t thread;
 
 	/* if we're running in numa mode, set our memory node */
 	if (par->node != -1)
@@ -618,7 +748,8 @@ void *timerthread(void *param)
 	if (par->cpu != -1) {
 		CPU_ZERO(&mask);
 		CPU_SET(par->cpu, &mask);
-		if(sched_setaffinity(0, sizeof(mask), &mask) == -1)
+		thread = pthread_self();
+		if(pthread_setaffinity_np(thread, sizeof(mask), &mask) == -1)
 			warn("Could not set CPU affinity to CPU #%d\n", par->cpu);
 	}
 
@@ -641,10 +772,23 @@ void *timerthread(void *param)
 
 	memset(&schedp, 0, sizeof(schedp));
 	schedp.sched_priority = par->prio;
-	sched_setscheduler(0, par->policy, &schedp);
+	if (setscheduler(0, par->policy, &schedp))
+		fatal("timerthread%d: failed to set priority to %d\n", par->cpu, par->prio);
 
 	/* Get current time */
-	clock_gettime(par->clock, &now);
+	if(aligned){
+		pthread_barrier_wait(&globalt_barr);
+		if(par->tnum==0)
+			clock_gettime(par->clock, &globalt);
+		pthread_barrier_wait(&align_barr);
+		now = globalt;
+		if(offset) {
+			now.tv_nsec += offset * par->tnum;
+			tsnorm(&now);
+		}
+	}
+	else
+		clock_gettime(par->clock, &now);
 
 	next = now;
 	next.tv_sec += interval.tv_sec;
@@ -655,23 +799,20 @@ void *timerthread(void *param)
 		memset(&stop, 0, sizeof(stop)); /* grrr */
 		stop = now;
 		stop.tv_sec += duration;
-		tsnorm(&stop);
 	}
 	if (par->mode == MODE_CYCLIC) {
 		if (par->timermode == TIMER_ABSTIME)
 			tspec.it_value = next;
 		else {
-			tspec.it_value.tv_nsec = 0;
-			tspec.it_value.tv_sec = 1;
+			tspec.it_value = interval;
 		}
 		timer_settime(timer, par->timermode, &tspec, NULL);
 	}
 
 	if (par->mode == MODE_SYS_ITIMER) {
-		itimer.it_value.tv_sec = 1;
-		itimer.it_value.tv_usec = 0;
 		itimer.it_interval.tv_sec = interval.tv_sec;
 		itimer.it_interval.tv_usec = interval.tv_nsec / 1000;
+		itimer.it_value = itimer.it_interval;
 		setitimer (ITIMER_REAL, &itimer, NULL);
 	}
 
@@ -692,35 +833,50 @@ void *timerthread(void *param)
 
 		case MODE_CLOCK_NANOSLEEP:
 			if (par->timermode == TIMER_ABSTIME) {
-				ret = clock_nanosleep(par->clock, TIMER_ABSTIME,
-						&next, NULL);
+				if ((ret = clock_nanosleep(par->clock, TIMER_ABSTIME, &next, NULL))) {
+					if (ret != EINTR)
+						warn("clock_nanosleep failed. errno: %d\n", errno);
+					goto out;
+				}
 			} else {
-				clock_gettime(par->clock, &now);
-				ret = clock_nanosleep(par->clock, TIMER_RELTIME,
-						&interval, NULL);
+				if ((ret = clock_gettime(par->clock, &now))) {
+					if (ret != EINTR)
+						warn("clock_gettime() failed: %s", strerror(errno));
+					goto out;
+				}
+				if ((ret = clock_nanosleep(par->clock, TIMER_RELTIME, &interval, NULL))) {
+					if (ret != EINTR)
+						warn("clock_nanosleep() failed. errno: %d\n", errno);
+					goto out;
+				}
 				next.tv_sec = now.tv_sec + interval.tv_sec;
 				next.tv_nsec = now.tv_nsec + interval.tv_nsec;
 				tsnorm(&next);
 			}
-
-			/* Avoid negative calcdiff result if clock_nanosleep() 
-			 * gets interrupted.
-			 */
-			if (ret == EINTR)
-				goto out;
-
 			break;
 
 		case MODE_SYS_NANOSLEEP:
-			clock_gettime(par->clock, &now);
-			nanosleep(&interval, NULL);
+			if ((ret = clock_gettime(par->clock, &now))) {
+				if (ret != EINTR)
+					warn("clock_gettime() failed: errno %d\n", errno);
+				goto out;
+			}
+			if (nanosleep(&interval, NULL)) {
+				if (errno != EINTR)
+					warn("nanosleep failed. errno: %d\n", errno);
+				goto out;
+			}
 			next.tv_sec = now.tv_sec + interval.tv_sec;
 			next.tv_nsec = now.tv_nsec + interval.tv_nsec;
 			tsnorm(&next);
 			break;
 		}
 
-		clock_gettime(par->clock, &now);
+		if ((ret = clock_gettime(par->clock, &now))) {
+			if (ret != EINTR)
+				warn("clock_getttime() failed. errno: %d\n", errno);
+			goto out;
+		}
 
 		if (use_nsecs)
 			diff = calcdiff_ns(now, next);
@@ -740,6 +896,8 @@ void *timerthread(void *param)
 
 		if (!stopped && tracelimit && (diff > tracelimit)) {
 			stopped++;
+			tracemark("hit latency threshold (%llu > %d)",
+				  (unsigned long long) diff, tracelimit);
 			tracing(0);
 			shutdown++;
 			pthread_mutex_lock(&break_thread_id_lock);
@@ -749,18 +907,22 @@ void *timerthread(void *param)
 			pthread_mutex_unlock(&break_thread_id_lock);
 		}
 		stat->act = diff;
-		stat->cycles++;
 
 		if (par->bufmsk)
 			stat->values[stat->cycles & par->bufmsk] = diff;
 
 		/* Update the histogram */
 		if (histogram) {
-			if (diff >= histogram)
+			if (diff >= histogram) {
 				stat->hist_overflow++;
+				if (stat->num_outliers < histogram)
+					stat->outliers[stat->num_outliers++] = stat->cycles;
+			}
 			else
 				stat->hist_array[diff]++;
 		}
+
+		stat->cycles++;
 
 		next.tv_sec += interval.tv_sec;
 		next.tv_nsec += interval.tv_nsec;
@@ -811,12 +973,22 @@ static void display_help(int error)
 		if (kernvar(O_RDONLY, "available_tracers", tracers, sizeof(tracers)))
 			strcpy(tracers, "none");
 	}
-		
+
 	printf("cyclictest V %1.2f\n", VERSION_STRING);
 	printf("Usage:\n"
 	       "cyclictest <options>\n\n"
+#if LIBNUMA_API_VERSION >= 2
+	       "-a [CPUSET] --affinity     Run thread #N on processor #N, if possible, or if CPUSET\n"
+	       "                           given, pin threads to that set of processors in round-\n"
+	       "                           robin order.  E.g. -a 2 pins all threads to CPU 2,\n"
+	       "                           but -a 3-5,0 -t 5 will run the first and fifth\n"
+	       "                           threads on CPU (0),thread #2 on CPU 3, thread #3\n"
+	       "                           on CPU 4, and thread #5 on CPU 5.\n"
+#else
 	       "-a [NUM] --affinity        run thread #N on processor #N, if possible\n"
 	       "                           with NUM pin all threads to the processor NUM\n"
+#endif
+	       "-A USEC  --aligned=USEC    align thread wakeups to a specific offset\n"
 	       "-b USEC  --breaktrace=USEC send break trace command when latency > USEC\n"
 	       "-B       --preemptirqs     both preempt and irqsoff tracing (used with -b)\n"
 	       "-c CLOCK --clock=CLOCK     select clock\n"
@@ -827,17 +999,19 @@ static void display_help(int error)
 	       "-D       --duration=t      specify a length for the test run\n"
 	       "                           default is in seconds, but 'm', 'h', or 'd' maybe added\n"
 	       "                           to modify value to minutes, hours or days\n"
+	       "-e       --latency=PM_QOS  write PM_QOS to /dev/cpu_dma_latency\n"
 	       "-E       --event           event tracing (used with -b)\n"
 	       "-f       --ftrace          function trace (when -b is active)\n"
+	       "-F       --fifo=<path>     create a named pipe at path and write stats to it\n"
 	       "-h       --histogram=US    dump a latency histogram to stdout after the run\n"
-               "                           (with same priority about many threads)\n"
+	       "                           (with same priority about many threads)\n"
 	       "                           US is the max time to be be tracked in microseconds\n"
 	       "-H       --histofall=US    same as -h except with an additional summary column\n"
 	       "-i INTV  --interval=INTV   base interval of thread in us default=1000\n"
 	       "-I       --irqsoff         Irqsoff tracing (used with -b)\n"
 	       "-l LOOPS --loops=LOOPS     number of loops: default=0(endless)\n"
 	       "-m       --mlockall        lock current and future memory allocations\n"
-	       "-M       --refresh_on_max  delay updating the screen until a new max latency is hit\n" 
+	       "-M       --refresh_on_max  delay updating the screen until a new max latency is hit\n"
 	       "-n       --nanosleep       use clock_nanosleep\n"
 	       "-N       --nsecs           print results in ns instead of us (default us)\n"
 	       "-o RED   --oscope=RED      oscilloscope mode, reduce verbose output by RED\n"
@@ -845,8 +1019,14 @@ static void display_help(int error)
 	       "-p PRIO  --prio=PRIO       priority of highest prio thread\n"
 	       "-P       --preemptoff      Preempt off tracing (used with -b)\n"
 	       "-q       --quiet           print only a summary on exit\n"
+	       "-Q       --priospread       spread priority levels starting at specified value\n"
 	       "-r       --relative        use relative timer instead of absolute\n"
+	       "-R       --resolution      check clock resolution, calling clock_gettime() many\n"
+	       "                           times.  list of clock_gettime() values will be\n"
+	       "                           reported with -X\n"
 	       "-s       --system          use sys_nanosleep and sys_setitimer\n"
+	       "-S       --smp             Standard SMP testing: options -a -t -n and\n"
+	       "                           same priority of all threads\n"
 	       "-t       --threads         one thread per available processor\n"
 	       "-t [NUM] --threads=NUM     number of threads:\n"
 	       "                           without NUM, threads = max_cpus\n"
@@ -854,16 +1034,17 @@ static void display_help(int error)
 	       "-T TRACE --tracer=TRACER   set tracing function\n"
 	       "    configured tracers: %s\n"
 	       "-u       --unbuffered      force unbuffered output for live processing\n"
+#ifdef NUMA
+	       "-U       --numa            Standard NUMA testing (similar to SMP option)\n"
+	       "                           thread data structures allocated from local node\n"
+#endif
 	       "-v       --verbose         output values on stdout for statistics\n"
 	       "                           format: n:c:v n=tasknum c=count v=value in us\n"
-               "-w       --wakeup          task wakeup tracing (used with -b)\n"
-               "-W       --wakeuprt        rt task wakeup tracing (used with -b)\n"
-               "-y POLI  --policy=POLI     policy of realtime thread, POLI may be fifo(default) or rr\n"
-               "                           format: --policy=fifo(default) or --policy=rr\n"
-	       "-S       --smp             Standard SMP testing: options -a -t -n and\n"
-               "                           same priority of all threads\n"
-	       "-U       --numa            Standard NUMA testing (similar to SMP option)\n"
-               "                           thread data structures allocated from local node\n",
+	       "-w       --wakeup          task wakeup tracing (used with -b)\n"
+	       "-W       --wakeuprt        rt task wakeup tracing (used with -b)\n"
+	       "-X       --dbg_cyclictest  print info useful for debugging cyclictest\n"
+	       "-y POLI  --policy=POLI     policy of realtime thread, POLI may be fifo(default) or rr\n"
+	       "                           format: --policy=fifo(default) or --policy=rr\n",
 	       tracers
 		);
 	if (error)
@@ -882,7 +1063,7 @@ static int clocksel = 0;
 static int quiet;
 static int interval = DEFAULT_INTERVAL;
 static int distance = -1;
-static int affinity = 0;
+static struct bitmask *affinity_mask = NULL;
 static int smp = 0;
 
 enum {
@@ -896,6 +1077,50 @@ static int clocksources[] = {
 	CLOCK_MONOTONIC,
 	CLOCK_REALTIME,
 };
+
+static unsigned int is_cpumask_zero(const struct bitmask *mask)
+{
+	return (rt_numa_bitmask_count(mask) == 0);
+}
+
+static int cpu_for_thread(int thread_num, int max_cpus)
+{
+	unsigned int m, cpu, i, num_cpus;
+	num_cpus = rt_numa_bitmask_count(affinity_mask);
+
+	m = thread_num % num_cpus;
+
+	/* there are num_cpus bits set, we want position of m'th one */
+	for (i = 0, cpu = 0; i < max_cpus; i++) {
+		if (rt_numa_bitmask_isbitset(affinity_mask, i)) {
+			if (cpu == m)
+				return i;
+			cpu++;
+		}
+	}
+	fprintf(stderr, "Bug in cpu mask handling code.\n");
+	return 0;
+}
+
+
+static void parse_cpumask(const char *option, const int max_cpus)
+{
+	affinity_mask = rt_numa_parse_cpustring(option, max_cpus);
+	if (affinity_mask) {
+		if (is_cpumask_zero(affinity_mask)) {
+			rt_bitmask_free(affinity_mask);
+			affinity_mask = NULL;
+		}
+	}
+	if (!affinity_mask)
+		display_help(1);
+
+	if (verbose) {
+		printf("%s: Using %u cpus.\n", __func__,
+			rt_numa_bitmask_count(affinity_mask));
+	}
+}
+
 
 static void handlepolicy(char *polname)
 {
@@ -938,85 +1163,146 @@ static char *policyname(int policy)
 }
 
 
+enum option_values {
+	OPT_AFFINITY=1, OPT_NOTRACE, OPT_BREAKTRACE, OPT_PREEMPTIRQ, OPT_CLOCK,
+	OPT_CONTEXT, OPT_DISTANCE, OPT_DURATION, OPT_LATENCY, OPT_EVENT,
+	OPT_FTRACE, OPT_FIFO, OPT_HISTOGRAM, OPT_HISTOFALL, OPT_INTERVAL,
+	OPT_IRQSOFF, OPT_LOOPS, OPT_MLOCKALL, OPT_REFRESH, OPT_NANOSLEEP,
+	OPT_NSECS, OPT_OSCOPE, OPT_TRACEOPT, OPT_PRIORITY, OPT_PREEMPTOFF,
+	OPT_QUIET, OPT_PRIOSPREAD, OPT_RELATIVE, OPT_RESOLUTION, OPT_SYSTEM,
+	OPT_SMP, OPT_THREADS, OPT_TRACER, OPT_UNBUFFERED, OPT_NUMA, OPT_VERBOSE,
+	OPT_WAKEUP, OPT_WAKEUPRT, OPT_DBGCYCLIC, OPT_POLICY, OPT_HELP, OPT_NUMOPTS,
+	OPT_ALIGNED,
+};
+
 /* Process commandline options */
-static void process_options (int argc, char *argv[])
+static void process_options (int argc, char *argv[], int max_cpus)
 {
 	int error = 0;
-	int max_cpus = sysconf(_SC_NPROCESSORS_CONF);
+	int option_affinity = 0;
 
 	for (;;) {
 		int option_index = 0;
-		/** Options for getopt */
+		/*
+		 * Options for getopt
+		 * Ordered alphabetically by single letter name
+		 */
 		static struct option long_options[] = {
-			{"affinity", optional_argument, NULL, 'a'},
-			{"breaktrace", required_argument, NULL, 'b'},
-			{"preemptirqs", no_argument, NULL, 'B'},
-			{"clock", required_argument, NULL, 'c'},
-			{"context", no_argument, NULL, 'C'},
-			{"distance", required_argument, NULL, 'd'},
-			{"event", no_argument, NULL, 'E'},
-			{"ftrace", no_argument, NULL, 'f'},
-			{"histogram", required_argument, NULL, 'h'},
-			{"histofall", required_argument, NULL, 'H'},
-			{"interval", required_argument, NULL, 'i'},
-			{"irqsoff", no_argument, NULL, 'I'},
-			{"loops", required_argument, NULL, 'l'},
-			{"mlockall", no_argument, NULL, 'm' },
-			{"refresh_on_max", no_argument, NULL, 'M' },
-			{"nanosleep", no_argument, NULL, 'n'},
-			{"nsecs", no_argument, NULL, 'N'},
-			{"oscope", required_argument, NULL, 'o'},
-			{"priority", required_argument, NULL, 'p'},
-                        {"policy", required_argument, NULL, 'y'},
-			{"preemptoff", no_argument, NULL, 'P'},
-			{"quiet", no_argument, NULL, 'q'},
-			{"relative", no_argument, NULL, 'r'},
-			{"system", no_argument, NULL, 's'},
-			{"threads", optional_argument, NULL, 't'},
-			{"unbuffered", no_argument, NULL, 'u'},
-			{"verbose", no_argument, NULL, 'v'},
-			{"duration",required_argument, NULL, 'D'},
-                        {"wakeup", no_argument, NULL, 'w'},
-                        {"wakeuprt", no_argument, NULL, 'W'},
-			{"help", no_argument, NULL, '?'},
-			{"tracer", required_argument, NULL, 'T'},
-			{"traceopt", required_argument, NULL, 'O'},
-			{"smp", no_argument, NULL, 'S'},
-			{"numa", no_argument, NULL, 'U'},
-			{"latency", required_argument, NULL, 'e'},
+			{"affinity",         optional_argument, NULL, OPT_AFFINITY},
+			{"notrace",          no_argument,       NULL, OPT_NOTRACE },
+			{"aligned",          optional_argument, NULL, OPT_ALIGNED },
+			{"breaktrace",       required_argument, NULL, OPT_BREAKTRACE },
+			{"preemptirqs",      no_argument,       NULL, OPT_PREEMPTIRQ },
+			{"clock",            required_argument, NULL, OPT_CLOCK },
+			{"context",          no_argument,       NULL, OPT_CONTEXT },
+			{"distance",         required_argument, NULL, OPT_DISTANCE },
+			{"duration",         required_argument, NULL, OPT_DURATION },
+			{"latency",          required_argument, NULL, OPT_LATENCY },
+			{"event",            no_argument,       NULL, OPT_EVENT },
+			{"ftrace",           no_argument,       NULL, OPT_FTRACE },
+			{"fifo",             required_argument, NULL, OPT_FIFO },
+			{"histogram",        required_argument, NULL, OPT_HISTOGRAM },
+			{"histofall",        required_argument, NULL, OPT_HISTOFALL },
+			{"interval",         required_argument, NULL, OPT_INTERVAL },
+			{"irqsoff",          no_argument,       NULL, OPT_IRQSOFF },
+			{"loops",            required_argument, NULL, OPT_LOOPS },
+			{"mlockall",         no_argument,       NULL, OPT_MLOCKALL },
+			{"refresh_on_max",   no_argument,       NULL, OPT_REFRESH },
+			{"nanosleep",        no_argument,       NULL, OPT_NANOSLEEP },
+			{"nsecs",            no_argument,       NULL, OPT_NSECS },
+			{"oscope",           required_argument, NULL, OPT_OSCOPE },
+			{"traceopt",         required_argument, NULL, OPT_TRACEOPT },
+			{"priority",         required_argument, NULL, OPT_PRIORITY },
+			{"preemptoff",       no_argument,       NULL, OPT_PREEMPTOFF },
+			{"quiet",            no_argument,       NULL, OPT_QUIET },
+			{"priospread",       no_argument,       NULL, OPT_PRIOSPREAD },
+			{"relative",         no_argument,       NULL, OPT_RELATIVE },
+			{"resolution",       no_argument,       NULL, OPT_RESOLUTION },
+			{"system",           no_argument,       NULL, OPT_SYSTEM },
+			{"smp",              no_argument,       NULL, OPT_SMP },
+			{"threads",          optional_argument, NULL, OPT_THREADS },
+			{"tracer",           required_argument, NULL, OPT_TRACER },
+			{"unbuffered",       no_argument,       NULL, OPT_UNBUFFERED },
+			{"numa",             no_argument,       NULL, OPT_NUMA },
+			{"verbose",          no_argument,       NULL, OPT_VERBOSE },
+			{"wakeup",           no_argument,       NULL, OPT_WAKEUP },
+			{"wakeuprt",         no_argument,       NULL, OPT_WAKEUPRT },
+			{"dbg_cyclictest",   no_argument,       NULL, OPT_DBGCYCLIC },
+			{"policy",           required_argument, NULL, OPT_POLICY },
+			{"help",             no_argument,       NULL, OPT_HELP },
 			{NULL, 0, NULL, 0}
 		};
-		int c = getopt_long(argc, argv, "a::b:Bc:Cd:Efh:H:i:Il:MnNo:O:p:PmqrsSt::uUvD:wWT:y:e:",
+		int c = getopt_long(argc, argv, "a::A::b:Bc:Cd:D:Efh:H:i:Il:MnNo:O:p:PmqrRsSt::uUvD:wWT:",
 				    long_options, &option_index);
 		if (c == -1)
 			break;
 		switch (c) {
 		case 'a':
-			if (smp) {
-				warn("-a ignored due to --smp\n");
+		case OPT_AFFINITY:
+			option_affinity = 1;
+			if (smp || numa)
 				break;
-			}
 			if (optarg != NULL) {
-				affinity = atoi(optarg);
+				parse_cpumask(optarg, max_cpus);
 				setaffinity = AFFINITY_SPECIFIED;
 			} else if (optind<argc && atoi(argv[optind])) {
-				affinity = atoi(argv[optind]);
+				parse_cpumask(argv[optind], max_cpus);
 				setaffinity = AFFINITY_SPECIFIED;
 			} else {
 				setaffinity = AFFINITY_USEALL;
 			}
 			break;
-		case 'b': tracelimit = atoi(optarg); break;
-		case 'B': tracetype = PREEMPTIRQSOFF; break;
-		case 'c': clocksel = atoi(optarg); break;
-		case 'C': tracetype = CTXTSWITCH; break;
-		case 'd': distance = atoi(optarg); break;
-		case 'E': enable_events = 1; break;
-		case 'f': tracetype = FUNCTION; ftrace = 1; break;
-		case 'H': histofall = 1; /* fall through */
-		case 'h': histogram = atoi(optarg); break;
-		case 'i': interval = atoi(optarg); break;
+		case 'A':
+		case OPT_ALIGNED:
+			aligned=1;
+			if (optarg != NULL)
+				offset = atoi(optarg);
+			else if (optind<argc && atoi(argv[optind]))
+				offset = atoi(argv[optind]);
+			else
+				offset = 0;
+			break;
+		case 'b':
+		case OPT_BREAKTRACE:
+			tracelimit = atoi(optarg); break;
+		case 'B':
+		case OPT_PREEMPTIRQ:
+			tracetype = PREEMPTIRQSOFF; break;
+		case 'c':
+		case OPT_CLOCK:
+			clocksel = atoi(optarg); break;
+		case 'C':
+		case OPT_CONTEXT:
+			tracetype = CTXTSWITCH; break;
+		case 'd':
+		case OPT_DISTANCE:
+			distance = atoi(optarg); break;
+		case 'D':
+		case OPT_DURATION:
+			duration = parse_time_string(optarg); break;
+		case 'E':
+		case OPT_EVENT:
+			enable_events = 1; break;
+		case 'f':
+		case OPT_FTRACE:
+			tracetype = FUNCTION; ftrace = 1; break;
+		case 'F':
+		case OPT_FIFO:
+			use_fifo = 1;
+			strncpy(fifopath, optarg, strlen(optarg));
+			break;
+
+		case 'H':
+		case OPT_HISTOFALL:
+			histofall = 1; /* fall through */
+		case 'h':
+		case OPT_HISTOGRAM:
+			histogram = atoi(optarg); break;
+		case 'i':
+		case OPT_INTERVAL:
+			interval = atoi(optarg); break;
 		case 'I':
+		case OPT_IRQSOFF:
 			if (tracetype == PREEMPTOFF) {
 				tracetype = PREEMPTIRQSOFF;
 				strncpy(tracer, "preemptirqsoff", sizeof(tracer));
@@ -1025,17 +1311,35 @@ static void process_options (int argc, char *argv[])
 				strncpy(tracer, "irqsoff", sizeof(tracer));
 			}
 			break;
-		case 'l': max_cycles = atoi(optarg); break;
-		case 'n': use_nanosleep = MODE_CLOCK_NANOSLEEP; break;
-		case 'N': use_nsecs = 1; break;
-		case 'o': oscope_reduction = atoi(optarg); break;
-		case 'O': traceopt(optarg); break;
-		case 'p': 
-			priority = atoi(optarg); 
+		case 'l':
+		case OPT_LOOPS:
+			max_cycles = atoi(optarg); break;
+		case 'm':
+		case OPT_MLOCKALL:
+			lockall = 1; break;
+		case 'M':
+		case OPT_REFRESH:
+			refresh_on_max = 1; break;
+		case 'n':
+		case OPT_NANOSLEEP:
+			use_nanosleep = MODE_CLOCK_NANOSLEEP; break;
+		case 'N':
+		case OPT_NSECS:
+			use_nsecs = 1; break;
+		case 'o':
+		case OPT_OSCOPE:
+			oscope_reduction = atoi(optarg); break;
+		case 'O':
+		case OPT_TRACEOPT:
+			traceopt(optarg); break;
+		case 'p':
+		case OPT_PRIORITY:
+			priority = atoi(optarg);
 			if (policy != SCHED_FIFO && policy != SCHED_RR)
 				policy = SCHED_FIFO;
 			break;
 		case 'P':
+		case OPT_PREEMPTOFF:
 			if (tracetype == IRQSOFF) {
 				tracetype = PREEMPTIRQSOFF;
 				strncpy(tracer, "preemptirqsoff", sizeof(tracer));
@@ -1044,10 +1348,29 @@ static void process_options (int argc, char *argv[])
 				strncpy(tracer, "preemptoff", sizeof(tracer));
 			}
 			break;
-		case 'q': quiet = 1; break;
-		case 'r': timermode = TIMER_RELTIME; break;
-		case 's': use_system = MODE_SYS_OFFSET; break;
+		case 'q':
+		case OPT_QUIET:
+			quiet = 1; break;
+		case 'r':
+		case OPT_RELATIVE:
+			timermode = TIMER_RELTIME; break;
+		case 'R':
+		case OPT_RESOLUTION:
+			check_clock_resolution = 1; break;
+		case 's':
+		case OPT_SYSTEM:
+			use_system = MODE_SYS_OFFSET; break;
+		case 'S':
+		case OPT_SMP: /* SMP testing */
+			if (numa)
+				fatal("numa and smp options are mutually exclusive\n");
+			smp = 1;
+			num_threads = max_cpus;
+			setaffinity = AFFINITY_USEALL;
+			use_nanosleep = MODE_CLOCK_NANOSLEEP;
+			break;
 		case 't':
+		case OPT_THREADS:
 			if (smp) {
 				warn("-t ignored due to --smp\n");
 				break;
@@ -1059,31 +1382,21 @@ static void process_options (int argc, char *argv[])
 			else
 				num_threads = max_cpus;
 			break;
-		case 'T': 
+		case 'T':
+		case OPT_TRACER:
 			tracetype = CUSTOM;
-			strncpy(tracer, optarg, sizeof(tracer)); 
+			strncpy(tracer, optarg, sizeof(tracer));
 			break;
-		case 'u': setvbuf(stdout, NULL, _IONBF, 0); break;
-		case 'v': verbose = 1; break;
-		case 'm': lockall = 1; break;
-		case 'M': refresh_on_max = 1; break;
-		case 'D': duration = parse_time_string(optarg);
-			break;
-                case 'w': tracetype = WAKEUP; break;
-                case 'W': tracetype = WAKEUPRT; break;
-                case 'y': handlepolicy(optarg); break;
-		case 'S':  /* SMP testing */
-			if (numa)
-				fatal("numa and smp options are mutually exclusive\n");
-			smp = 1;
-			num_threads = max_cpus;
-			setaffinity = AFFINITY_USEALL;
-			use_nanosleep = MODE_CLOCK_NANOSLEEP;
-			break;
-		case 'U':  /* NUMA testing */
+		case 'u':
+		case OPT_UNBUFFERED:
+			setvbuf(stdout, NULL, _IONBF, 0); break;
+		case 'U':
+		case OPT_NUMA: /* NUMA testing */
 			if (smp)
 				fatal("numa and smp options are mutually exclusive\n");
 #ifdef NUMA
+			if (numa_available() == -1)
+				fatal("NUMA functionality not available!");
 			numa = 1;
 			num_threads = max_cpus;
 			setaffinity = AFFINITY_USEALL;
@@ -1093,26 +1406,46 @@ static void process_options (int argc, char *argv[])
 			warn("ignoring --numa or -U\n");
 #endif
 			break;
-		case 'e': /* power management latency target value */
+		case 'v':
+		case OPT_VERBOSE: verbose = 1; break;
+		case 'w':
+		case OPT_WAKEUP:
+			tracetype = WAKEUP; break;
+		case 'W':
+		case OPT_WAKEUPRT:
+			tracetype = WAKEUPRT; break;
+		case '?':
+		case OPT_HELP:
+			display_help(0); break;
+
+		/* long only options */
+		case OPT_PRIOSPREAD:
+			priospread = 1; break;
+		case OPT_LATENCY:
+                          /* power management latency target value */
 			  /* note: default is 0 (zero) */
 			latency_target_value = atoi(optarg);
 			if (latency_target_value < 0)
 				latency_target_value = 0;
 			break;
-
-		case '?': display_help(0); break;
+		case OPT_NOTRACE:
+			notrace = 1; break;
+		case OPT_POLICY:
+			handlepolicy(optarg); break;
+		case OPT_DBGCYCLIC:
+			ct_debug = 1; break;
 		}
 	}
 
-	if (setaffinity == AFFINITY_SPECIFIED) {
-		if (affinity < 0)
-			error = 1;
-		if (affinity >= max_cpus) {
-			warn("CPU #%d not found, only %d CPUs available\n",
-			    affinity, max_cpus);
-			error = 1;
+	if (option_affinity) {
+		if (smp) {
+			warn("-a ignored due to --smp\n");
+		} else if (numa) {
+			warn("-a ignored due to --numa\n");
 		}
-	} else if (tracelimit)
+	}
+
+	if (tracelimit)
 		fileprefix = procfileprefix;
 
 	if (clocksel < 0 || clocksel > ARRAY_SIZE(clocksources))
@@ -1140,13 +1473,19 @@ static void process_options (int argc, char *argv[])
 	if (priority < 0 || priority > 99)
 		error = 1;
 
+	if (priospread && priority == 0) {
+		fprintf(stderr, "defaulting realtime priority to %d\n",
+			num_threads+1);
+		priority = num_threads+1;
+	}
+
 	if (priority && (policy != SCHED_FIFO && policy != SCHED_RR)) {
 		fprintf(stderr, "policy and priority don't match: setting policy to SCHED_FIFO\n");
 		policy = SCHED_FIFO;
 	}
 
 	if ((policy == SCHED_FIFO || policy == SCHED_RR) && priority == 0) {
-		fprintf(stderr, "defaulting realtime priority to %d\n", 
+		fprintf(stderr, "defaulting realtime priority to %d\n",
 			num_threads+1);
 		priority = num_threads+1;
 	}
@@ -1154,8 +1493,16 @@ static void process_options (int argc, char *argv[])
 	if (num_threads < 1)
 		error = 1;
 
-	if (error)
+	if (aligned) {
+		pthread_barrier_init(&globalt_barr, NULL, num_threads);
+		pthread_barrier_init(&align_barr, NULL, num_threads);
+	}
+
+	if (error) {
+		if (affinity_mask)
+			rt_bitmask_free(affinity_mask);
 		display_help(1);
+	}
 }
 
 static int check_kernel(void)
@@ -1188,7 +1535,7 @@ static int check_kernel(void)
 		kv = KV_30;
 		strcpy(functiontracer, "function");
 		strcpy(traceroptions, "trace_options");
-		
+
 	} else
 		kv = KV_NOT_SUPPORTED;
 
@@ -1207,10 +1554,23 @@ static int check_timer(void)
 
 static void sighand(int sig)
 {
+	if (sig == SIGUSR1) {
+		int i;
+		int oldquiet = quiet;
+
+		quiet = 0;
+		printf("#---------------------------\n");
+		printf("# cyclictest current status:\n");
+		for (i = 0; i < num_threads; i++)
+			print_stat(stdout, parameters[i], i, 0, 0);
+		printf("#---------------------------\n");
+		quiet = oldquiet;
+		return;
+	}
 	shutdown = 1;
 	if (refresh_on_max)
 		pthread_cond_signal(&refresh_on_max_cond);
-	if (tracelimit)
+	if (tracelimit && !notrace)
 		tracing(0);
 }
 
@@ -1270,7 +1630,7 @@ static void print_hist(struct thread_param *par[], int nthreads)
 	printf("# Max Latencies:");
 	maxmax = 0;
 	for (j = 0; j < nthreads; j++) {
- 		printf(" %05lu", par[j]->stats->max);
+		printf(" %05lu", par[j]->stats->max);
 		if (par[j]->stats->max > maxmax)
 			maxmax = par[j]->stats->max;
 	}
@@ -1280,15 +1640,26 @@ static void print_hist(struct thread_param *par[], int nthreads)
 	printf("# Histogram Overflows:");
 	alloverflows = 0;
 	for (j = 0; j < nthreads; j++) {
- 		printf(" %05lu", par[j]->stats->hist_overflow);
+		printf(" %05lu", par[j]->stats->hist_overflow);
 		alloverflows += par[j]->stats->hist_overflow;
 	}
 	if (histofall && nthreads > 1)
 		printf(" %05lu", alloverflows);
 	printf("\n");
+
+	printf("# Histogram Overflow at cycle number:\n");
+	for (i = 0; i < nthreads; i++) {
+		printf("# Thread %d:", i);
+		for (j = 0; j < par[i]->stats->num_outliers; j++)
+			printf(" %05lu", par[i]->stats->outliers[j]);
+		if (par[i]->stats->num_outliers < par[i]->stats->hist_overflow)
+			printf(" # %05lu others", par[i]->stats->hist_overflow - par[i]->stats->num_outliers);
+		printf("\n");
+	}
+	printf("\n");
 }
 
-static void print_stat(struct thread_param *par, int index, int verbose)
+static void print_stat(FILE *fp, struct thread_param *par, int index, int verbose, int quiet)
 {
 	struct thread_stat *stat = par->stats;
 
@@ -1296,15 +1667,15 @@ static void print_stat(struct thread_param *par, int index, int verbose)
 		if (quiet != 1) {
 			char *fmt;
 			if (use_nsecs)
-                                fmt = "T:%2d (%5d) P:%2d I:%ld C:%7lu "
+				fmt = "T:%2d (%5d) P:%2d I:%ld C:%7lu "
 					"Min:%7ld Act:%8ld Avg:%8ld Max:%8ld\n";
 			else
-                                fmt = "T:%2d (%5d) P:%2d I:%ld C:%7lu "
+				fmt = "T:%2d (%5d) P:%2d I:%ld C:%7lu "
 					"Min:%7ld Act:%5ld Avg:%5ld Max:%8ld\n";
-                        printf(fmt, index, stat->tid, par->prio, 
-                               par->interval, stat->cycles, stat->min, stat->act,
-			       stat->cycles ?
-			       (long)(stat->avg/stat->cycles) : 0, stat->max);
+			fprintf(fp, fmt, index, stat->tid, par->prio,
+				par->interval, stat->cycles, stat->min, stat->act,
+				stat->cycles ?
+				(long)(stat->avg/stat->cycles) : 0, stat->max);
 		}
 	} else {
 		while (stat->cycles != stat->cyclesread) {
@@ -1316,8 +1687,8 @@ static void print_stat(struct thread_param *par, int index, int verbose)
 				stat->cycleofmax = stat->cyclesread;
 			}
 			if (++stat->reduce == oscope_reduction) {
-				printf("%8d:%8lu:%8ld\n", index,
-				       stat->cycleofmax, stat->redmax);
+				fprintf(fp, "%8d:%8lu:%8ld\n", index,
+					stat->cycleofmax, stat->redmax);
 				stat->reduce = 0;
 				stat->redmax = 0;
 			}
@@ -1326,21 +1697,60 @@ static void print_stat(struct thread_param *par, int index, int verbose)
 	}
 }
 
+
+/*
+ * thread that creates a named fifo and hands out run stats when someone
+ * reads from the fifo.
+ */
+void *fifothread(void *param)
+{
+	int ret;
+	int fd;
+	FILE *fp;
+	int i;
+
+	if (use_fifo == 0)
+		return NULL;
+
+	unlink(fifopath);
+	ret = mkfifo(fifopath, 0666);
+	if (ret) {
+		fprintf(stderr, "Error creating fifo %s: %s\n", fifopath, strerror(errno));
+		return NULL;
+	}
+	while (!shutdown) {
+		fd = open(fifopath, O_WRONLY|O_NONBLOCK);
+		if (fd < 0) {
+			usleep(500000);
+			continue;
+		}
+		fp = fdopen(fd, "w");
+		for (i=0; i < num_threads; i++)
+			print_stat(fp, parameters[i], i, 0, 0);
+		fclose(fp);
+		usleep(250);
+	}
+	unlink(fifopath);
+	return NULL;
+}
+
+
 int main(int argc, char **argv)
 {
 	sigset_t sigset;
 	int signum = SIGALRM;
 	int mode;
-	struct thread_param **parameters;
-	struct thread_stat **statistics;
 	int max_cpus = sysconf(_SC_NPROCESSORS_CONF);
 	int i, ret = -1;
 	int status;
 
-	process_options(argc, argv);
+	process_options(argc, argv, max_cpus);
 
 	if (check_privs())
 		exit(EXIT_FAILURE);
+
+	if (verbose)
+		printf("Max CPUs = %d\n", max_cpus);
 
 	/* Checks if numa is on, program exits if numa on but not available */
 	numa_on_and_available();
@@ -1365,6 +1775,103 @@ int main(int argc, char **argv)
 	if (check_timer())
 		warn("High resolution timers not available\n");
 
+	if (check_clock_resolution) {
+		int clock;
+		uint64_t diff;
+		int k;
+		uint64_t min_non_zero_diff = UINT64_MAX;
+		struct timespec now;
+		struct timespec prev;
+		uint64_t reported_resolution = UINT64_MAX;
+		struct timespec res;
+		struct timespec *time;
+		int times;
+
+		clock = clocksources[clocksel];
+
+		if (clock_getres(clock, &res)) {
+			warn("clock_getres failed");
+		} else {
+			reported_resolution = (NSEC_PER_SEC * res.tv_sec) + res.tv_nsec;
+		}
+
+
+		/*
+		 * Calculate how many calls to clock_gettime are needed.
+		 * Then call it that many times.
+		 * Goal is to collect timestamps for ~ 0.001 sec.
+		 * This will reliably capture resolution <= 500 usec.
+		 */
+		times = 1000;
+		clock_gettime(clock, &prev);
+		for (k=0; k < times; k++) {
+			clock_gettime(clock, &now);
+		}
+
+		diff = calcdiff_ns(now, prev);
+		if (diff == 0) {
+			/*
+			 * No clock rollover occurred.
+			 * Use the default value for times.
+			 */
+			times = -1;
+		} else {
+			int call_time;
+			call_time = diff / times;         /* duration 1 call */
+			times = NSEC_PER_SEC / call_time; /* calls per second */
+			times /= 1000;                    /* calls per msec */
+			if (times < 1000)
+				times = 1000;
+		}
+		/* sanity check */
+		if ((times <= 0) || (times > 100000))
+			times = 100000;
+
+		time = calloc(times, sizeof(*time));
+
+		for (k=0; k < times; k++) {
+			clock_gettime(clock, &time[k]);
+		}
+
+		if (ct_debug) {
+			info("For %d consecutive calls to clock_gettime():\n", times);
+			info("time, delta time (nsec)\n");
+		}
+
+		prev = time[0];
+		for (k=1; k < times; k++) {
+
+			diff = calcdiff_ns(time[k], prev);
+			prev = time[k];
+
+			if (diff && (diff < min_non_zero_diff)) {
+				min_non_zero_diff = diff;
+			}
+
+			if (ct_debug)
+				info("%ld.%06ld  %5llu\n",
+				     time[k].tv_sec, time[k].tv_nsec,
+				     (unsigned long long)diff);
+		}
+
+		free(time);
+
+
+		if (verbose ||
+		    (min_non_zero_diff && (min_non_zero_diff > reported_resolution))) {
+			/*
+			 * Measured clock resolution includes the time to call
+			 * clock_gettime(), so it will be slightly larger than
+			 * actual resolution.
+			 */
+			warn("reported clock resolution: %llu nsec\n",
+			     (unsigned long long)reported_resolution);
+			warn("measured clock resolution approximately: %llu nsec\n",
+			     (unsigned long long)min_non_zero_diff);
+		}
+
+	}
+
 	mode = use_nanosleep + use_system;
 
 	sigemptyset(&sigset);
@@ -1373,6 +1880,7 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, sighand);
 	signal(SIGTERM, sighand);
+	signal(SIGUSR1, sighand);
 
 	parameters = calloc(num_threads, sizeof(struct thread_param *));
 	if (!parameters)
@@ -1434,10 +1942,12 @@ int main(int argc, char **argv)
 			int bufsize = histogram * sizeof(long);
 
 			stat->hist_array = threadalloc(bufsize, node);
-			if (stat->hist_array == NULL)
+			stat->outliers = threadalloc(bufsize, node);
+			if (stat->hist_array == NULL || stat->outliers == NULL)
 				fatal("failed to allocate histogram of size %d on node %d\n",
 				      histogram, i);
 			memset(stat->hist_array, 0, bufsize);
+			memset(stat->outliers, 0, bufsize);
 		}
 
 		if (verbose) {
@@ -1450,13 +1960,13 @@ int main(int argc, char **argv)
 		}
 
 		par->prio = priority;
-                if (priority && (policy == SCHED_FIFO || policy == SCHED_RR))
+		if (priority && (policy == SCHED_FIFO || policy == SCHED_RR))
 			par->policy = policy;
-                else {
+		else {
 			par->policy = SCHED_OTHER;
 			force_sched_other = 1;
 		}
-		if (priority && !histogram && !smp && !numa)
+		if (priospread)
 			priority--;
 		par->clock = clocksources[clocksel];
 		par->mode = mode;
@@ -1470,9 +1980,15 @@ int main(int argc, char **argv)
 		par->max_cycles = max_cycles;
 		par->stats = stat;
 		par->node = node;
+		par->tnum = i;
 		switch (setaffinity) {
 		case AFFINITY_UNSPECIFIED: par->cpu = -1; break;
-		case AFFINITY_SPECIFIED: par->cpu = affinity; break;
+		case AFFINITY_SPECIFIED:
+			par->cpu = cpu_for_thread(i, max_cpus);
+			if (verbose)
+				printf("Thread %d using cpu %d.\n", i,
+					par->cpu);
+			break;
 		case AFFINITY_USEALL: par->cpu = i % max_cpus; break;
 		}
 		stat->min = 1000000;
@@ -1484,6 +2000,8 @@ int main(int argc, char **argv)
 			fatal("failed to create thread %d: %s\n", i, strerror(status));
 
 	}
+	if (use_fifo)
+		status = pthread_create(&fifo_threadid, NULL, fifothread, NULL);
 
 	while (!shutdown) {
 		char lavg[256];
@@ -1513,7 +2031,7 @@ int main(int argc, char **argv)
 
 		for (i = 0; i < num_threads; i++) {
 
-			print_stat(parameters[i], i, verbose);
+			print_stat(stdout, parameters[i], i, verbose, quiet);
 			if(max_cycles && statistics[i]->cycles >= max_cycles)
 				allstopped++;
 		}
@@ -1545,7 +2063,7 @@ int main(int argc, char **argv)
 		if (statistics[i]->threadstarted) {
 			pthread_join(statistics[i]->thread, NULL);
 			if (quiet && !histogram)
-				print_stat(parameters[i], i, 0);
+				print_stat(stdout, parameters[i], i, 0, 0);
 		}
 		if (statistics[i]->values)
 			threadfree(statistics[i]->values, VALBUF_SIZE*sizeof(long), parameters[i]->node);
@@ -1553,18 +2071,20 @@ int main(int argc, char **argv)
 
 	if (histogram) {
 		print_hist(parameters, num_threads);
-		for (i = 0; i < num_threads; i++)
+		for (i = 0; i < num_threads; i++) {
 			threadfree(statistics[i]->hist_array, histogram*sizeof(long), parameters[i]->node);
+			threadfree(statistics[i]->outliers, histogram*sizeof(long), parameters[i]->node);
+		}
 	}
 
 	if (tracelimit) {
 		print_tids(parameters, num_threads);
 		if (break_thread_id) {
 			printf("# Break thread: %d\n", break_thread_id);
-			printf("# Break value: %lu\n", break_thread_value);
+			printf("# Break value: %llu\n", (unsigned long long)break_thread_value);
 		}
 	}
-	
+
 
 	for (i=0; i < num_threads; i++) {
 		if (!statistics[i])
@@ -1580,20 +2100,23 @@ int main(int argc, char **argv)
 	}
  out:
 	/* ensure that the tracer is stopped */
-	if (tracelimit)
+	if (tracelimit && !notrace)
 		tracing(0);
 
 
 	/* close any tracer file descriptors */
+	if (tracemark_fd >= 0)
+		close(tracemark_fd);
 	if (trace_fd >= 0)
 		close(trace_fd);
 
-	/* turn off all events */
-	event_disable_all();
+	if (enable_events)
+		/* turn off all events */
+		event_disable_all();
 
 	/* turn off the function tracer */
 	fileprefix = procfileprefix;
-	if (tracetype)
+	if (tracetype && !notrace)
 		setkernvar("ftrace_enabled", "0");
 	fileprefix = get_debugfileprefix();
 
@@ -1608,6 +2131,9 @@ int main(int argc, char **argv)
 	/* close the latency_target_fd if it's open */
 	if (latency_target_fd >= 0)
 		close(latency_target_fd);
+
+	if (affinity_mask)
+		rt_bitmask_free(affinity_mask);
 
 	exit(ret);
 }

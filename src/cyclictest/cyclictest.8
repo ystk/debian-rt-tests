@@ -16,7 +16,7 @@
 cyclictest \- High resolution test program
 .SH SYNOPSIS
 .B cyclictest
-.RI "[ \-hfmnqrsvMS ] [\-a " proc " ] [\-b " usec " ] [\-c " clock " ] [\-d " dist " ] \
+.RI "[ \-hfmnqrsvMS ] [\-a " proc " ] [\-A " align " ] [\-b " usec " ] [\-c " clock " ] [\-d " dist " ] \
 [\-h " histogram " ] [\-i " intv " ] [\-l " loop " ] [\-o " red " ] [\-p " prio " ] \
 [\-t " num " ] [\-D " time "] [\-w] [\-W] [\-y " policy " ] [ \-S | \-U ]"
 
@@ -33,8 +33,21 @@ options starting with two dashes ('\-\-').
 A summary of options is included below.
 .\" For a complete description, see the Info files.
 .TP
-.B \-a, \-\-affinity[=PROC]
-Run all threads on procesor number PROC. If PROC is not specified, run thread #N on processor #N.
+.B \-a, \-\-affinity[=PROC-SET]
+Run threads on the set of procesors given by PROC-SET.  If PROC-SET is not
+specified, all processors will be used.  Threads will be assigned to processors
+in the set in numeric order, in a round-robin fashion.
+.br
+The set of processors can be specified as A,B,C, or A-C, or A-B,D-F, and so on*.
+The ! character can be used to negate a set.  For example, !B-D means to use all
+available CPUs except B through D.  The cpu numbers are the same as shown in the 
+.I processor
+field in /proc/cpuinfo.  See numa(3) for more information on specifying CPU sets.
+* Support for CPU sets requires libnuma version >= 2.  For libnuma v1, PROC-SET,
+if specified, must be a single CPU number.
+.TP
+.B \-A, \-\-align=USEC
+Align measurement thread wakeups to a specific offset in microseconds
 .TP
 .B \-b, \-\-breaktrace=USEC
 Send break trace command when latency > USEC. This is a debugging option to control the latency tracer in the realtime preemption patch.
@@ -149,14 +162,14 @@ where n=task number c=count v=latency value in us. Use this option in combinatio
 .B \\-D, \-\-duration=TIME
 Run the test for the specified time, which defaults to seconds. Append 'm', 'h', or 'd' to specify minutes, hours or days
 .TP
-.B \\-w, \-\-wakeup 
+.B \\-w, \-\-wakeup
 task wakeup tracing (used with \-b)
 .TP
 .B \\-W, \-\-wakeuprt
 rt-task wakeup tracing (used with \-b)
 .TP
 .B \\-y, \-\-policy=NAME
-set the scheduler policy of the measurement threads 
+set the scheduler policy of the measurement threads
 where NAME is one of: other, normal, batch, idle, fifo, rr
 .TP
 .B \\-M, \-\-refresh_on_max
@@ -166,7 +179,7 @@ running cyclictest on low-bandwidth connections)
 .B \\-S, \-\-smp
 Set options for standard testing on SMP systems. Equivalent to using
 the options: "\-t \-a \-n" as well keeping any specified priority
-equal across all threads 
+equal across all threads
 .TP
 .B \\-U, \-\-numa
 Similar to the above \-\-smp option, this implies the "\-t \-a \-n"
@@ -175,9 +188,8 @@ memory allocations using the numa(3) policy library. Thread stacks and
 data structures are allocated from the NUMA node local to the core to
 which the thread is bound. Requires the underlying kernel to have NUMA
 support compiled in.
-.\" .SH SEE ALSO
-.\" .BR bar (1),
-.\" .BR baz (1).
+.SH SEE ALSO
+.BR numactl (8),
 .\" .br
 .\" The programs are documented fully by
 .\" .IR "The Rise and Fall of a Fooish Bar" ,
